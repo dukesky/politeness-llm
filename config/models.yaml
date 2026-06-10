@@ -1,0 +1,58 @@
+# =============================================================================
+# Model roster (VERIFY before W2: exact OpenRouter model IDs, provider names,
+# and current prices at https://openrouter.ai/models — prices change often).
+#
+# provider.order pins the backend so quantization/serving differences across
+# providers don't confound the experiment. Record actual provider in raw logs.
+# =============================================================================
+
+defaults:
+  temperature: 0.0
+  top_p: 1.0
+  max_tokens: 50
+  n_runs: 3            # repeats per (model, prompt, pair) to measure API nondeterminism
+
+models:
+  - model_id: openai/gpt-4o-mini        # TODO verify id & price
+    tier: cheap
+    family: openai
+    provider_order: ["openai"]
+    price_per_m_input: 0.15             # USD, TODO verify
+    price_per_m_output: 0.60
+
+  - model_id: anthropic/claude-3.5-haiku  # TODO verify id & price
+    tier: cheap
+    family: anthropic
+    provider_order: ["anthropic"]
+    price_per_m_input: 0.80
+    price_per_m_output: 4.00
+
+  - model_id: google/gemini-2.0-flash-001  # TODO verify id & price
+    tier: cheap
+    family: google
+    provider_order: ["google-vertex"]
+    price_per_m_input: 0.10
+    price_per_m_output: 0.40
+
+  - model_id: meta-llama/llama-3.1-70b-instruct  # TODO verify id, pick ONE provider
+    tier: open_mid
+    family: llama
+    provider_order: []                  # TODO pin a single provider after checking quantization (prefer fp16/bf16)
+    price_per_m_input: null
+    price_per_m_output: null
+
+  - model_id: qwen/qwen-2.5-7b-instruct  # TODO verify id, pick ONE provider
+    tier: open_small
+    family: qwen
+    provider_order: []
+    price_per_m_input: null
+    price_per_m_output: null
+
+  # Flagship reference — run on 20% subsample only (set subsample: 0.2)
+  - model_id: openai/gpt-4o             # TODO verify / consider current flagship
+    tier: flagship
+    family: openai
+    provider_order: ["openai"]
+    price_per_m_input: 2.50
+    price_per_m_output: 10.00
+    subsample: 0.2

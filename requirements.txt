@@ -1,0 +1,8 @@
+aiohttp
+pyyaml
+pandas
+pyarrow
+scikit-learn
+ir_datasets
+matplotlib
+scipy

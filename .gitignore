@@ -1,0 +1,8 @@
+*.jsonl
+*.parquet
+*.env
+.env
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+data/
