@@ -66,6 +66,8 @@ def compose_prompt(variant, rubric, query, passage):
 def parse_score(text):
     """Return (score, parse_ok). Strict-ish: look for a JSON object with an
     integer 'score' in 0..3; fall back to a bare digit. Failures are data."""
+    if not isinstance(text, str):
+        return None, False
     try:
         m = re.search(r"\{[^{}]*\}", text, re.DOTALL)
         if m:
@@ -124,49 +126,63 @@ async def call_one(session, sem, task, cfg, out_files, code_version):
         if model.get("provider_order"):
             payload["provider"] = {"order": model["provider_order"],
                                    "allow_fallbacks": False}
-        effort = model.get("reasoning_effort", cfg.get("reasoning_effort"))
-        if effort:
-            payload["reasoning"] = {"effort": effort}
+        if model.get("reasoning_mode") == "disabled":
+            payload["reasoning"] = {"enabled": False}
+        else:
+            effort = model.get("reasoning_effort", cfg.get("reasoning_effort"))
+            if effort:
+                payload["reasoning"] = {"effort": effort}
 
         headers = {"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}
+        # Only network-level failures (non-200, timeout, connection error) are retried.
+        # HTTP 200 with empty/None content is recorded as-is — it's data, not an error.
         last_err = None
+        body = None
+        latency = None
         for attempt in range(MAX_RETRIES):
             try:
                 t0 = time.time()
                 async with session.post(OPENROUTER_URL, json=payload,
                                         headers=headers, timeout=120) as resp:
                     body = await resp.json()
+                    latency = time.time() - t0
                     if resp.status != 200:
                         raise RuntimeError(f"HTTP {resp.status}: {body}")
-                latency = time.time() - t0
-                text = body["choices"][0]["message"]["content"]
-                score, ok = parse_score(text)
-                record = {
-                    "model_id": model["model_id"],
-                    "provider": body.get("provider"),
-                    "prompt_id": variant["prompt_id"],
-                    "politeness_level": variant["politeness_level"],
-                    "dataset": pair["dataset"],
-                    "qid": pair["qid"],
-                    "docid": pair["docid"],
-                    "run": run,
-                    "score": score,
-                    "parse_ok": ok,
-                    "raw_output": text,
-                    "usage": body.get("usage"),
-                    "latency_s": round(latency, 3),
-                    "code_version": code_version,
-                    "ts": time.time(),
-                }
-                fkey = (model["model_id"], variant["prompt_id"], run)
-                f = out_files[fkey]
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
-                f.flush()  # durability on Drive: flush every record
-                return
+                break  # HTTP 200 — record unconditionally, no more retries
             except Exception as e:  # noqa: BLE001
                 last_err = e
-                await asyncio.sleep(2 ** attempt)
-        print(f"[FAILED after {MAX_RETRIES} tries] {task_desc(task)}: {last_err}")
+                if attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(2 ** attempt)
+        else:
+            print(f"[FAILED after {MAX_RETRIES} tries] {task_desc(task)}: {last_err}")
+            return
+
+        choice = body["choices"][0]
+        text = choice["message"]["content"]  # may be None
+        finish_reason = choice.get("finish_reason")
+        score, ok = parse_score(text)
+        record = {
+            "model_id": model["model_id"],
+            "provider": body.get("provider"),
+            "prompt_id": variant["prompt_id"],
+            "politeness_level": variant["politeness_level"],
+            "dataset": pair["dataset"],
+            "qid": pair["qid"],
+            "docid": pair["docid"],
+            "run": run,
+            "score": score,
+            "parse_ok": ok,
+            "finish_reason": finish_reason,
+            "raw_output": text,
+            "usage": body.get("usage"),
+            "latency_s": round(latency, 3),
+            "code_version": code_version,
+            "ts": time.time(),
+        }
+        fkey = (model["model_id"], variant["prompt_id"], run)
+        f = out_files[fkey]
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.flush()  # durability on Drive: flush every record
 
 
 def task_desc(task):

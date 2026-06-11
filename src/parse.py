@@ -38,6 +38,7 @@ def load_raw(raw_dir: Path) -> pd.DataFrame:
                     "tokens_out": u.get("completion_tokens"),
                     "tokens_reasoning": details.get("reasoning_tokens"),
                     "cost_usd_reported": u.get("cost"),
+                    "finish_reason": r.get("finish_reason"),
                     "latency_s": r.get("latency_s"),
                     "code_version": r.get("code_version"),
                 })
