@@ -31,7 +31,7 @@ variants:
   - prompt_id: L1_a
     politeness_level: 1
     paraphrase: a
-    politeness_classifier_score: null
+    politeness_classifier_score: 0.000
     wrapper_prefix: |
       Score this passage. Don't waste my time with explanations.
     wrapper_suffix: |
@@ -40,7 +40,7 @@ variants:
   - prompt_id: L1_b
     politeness_level: 1
     paraphrase: b
-    politeness_classifier_score: null
+    politeness_classifier_score: 0.000
     wrapper_prefix: |
       Do your job and rate this passage. I don't care about your reasoning.
     wrapper_suffix: |
@@ -49,7 +49,7 @@ variants:
   - prompt_id: L1_c
     politeness_level: 1
     paraphrase: c
-    politeness_classifier_score: null
+    politeness_classifier_score: 0.000
     wrapper_prefix: |
       Hurry up and score this passage. Skip the chatter.
     wrapper_suffix: |
@@ -59,7 +59,7 @@ variants:
   - prompt_id: L2_a
     politeness_level: 2
     paraphrase: a
-    politeness_classifier_score: null
+    politeness_classifier_score: 0.732
     wrapper_prefix: |
       Score the relevance of the passage to the query.
     wrapper_suffix: |
@@ -68,16 +68,16 @@ variants:
   - prompt_id: L2_b
     politeness_level: 2
     paraphrase: b
-    politeness_classifier_score: null
+    politeness_classifier_score: 0.771
     wrapper_prefix: |
-      Rate how relevant the passage is to the query.
+      Rate the relevance of the passage to the query.
     wrapper_suffix: |
-      Return the JSON object {"score": <0-3>} only.
+      Output the JSON object {"score": <0-3>} only.
 
   - prompt_id: L2_c
     politeness_level: 2
     paraphrase: c
-    politeness_classifier_score: null
+    politeness_classifier_score: 0.534
     wrapper_prefix: |
       Evaluate the passage against the query.
     wrapper_suffix: |
@@ -87,16 +87,16 @@ variants:
   - prompt_id: L3_a
     politeness_level: 3
     paraphrase: a
-    politeness_classifier_score: null
+    politeness_classifier_score: 0.968
     wrapper_prefix: |
       You are evaluating the relevance of a passage to a search query.
     wrapper_suffix: |
-      Respond with only the JSON object {"score": <0-3>}.
+      Provide your assessment as the JSON object {"score": <0-3>} with no additional text.
 
   - prompt_id: L3_b
     politeness_level: 3
     paraphrase: b
-    politeness_classifier_score: null
+    politeness_classifier_score: 1.000
     wrapper_prefix: |
       Your task is to assess how relevant the passage below is to the given search query.
     wrapper_suffix: |
@@ -105,26 +105,26 @@ variants:
   - prompt_id: L3_c
     politeness_level: 3
     paraphrase: c
-    politeness_classifier_score: null
+    politeness_classifier_score: 1.034
     wrapper_prefix: |
-      Consider the search query and the passage below, and judge the relevance of the passage to the query.
+      Consider the search query and the passage below, and judge how relevant the passage is to the query.
     wrapper_suffix: |
-      Answer with the JSON object {"score": <0-3>} and nothing more.
+      Give your answer as the JSON object {"score": <0-3>} without any additional text.
 
   # ------------------------------ L4: polite --------------------------------
   - prompt_id: L4_a
     politeness_level: 4
     paraphrase: a
-    politeness_classifier_score: null
+    politeness_classifier_score: 2.273
     wrapper_prefix: |
-      Please evaluate the relevance of the passage below to the search query.
+      Could you please evaluate the relevance of the passage below to the search query?
     wrapper_suffix: |
-      Please respond with only the JSON object {"score": <0-3>}. Thank you.
+      Please share your answer as the JSON object {"score": <0-3>}. Thanks so much for your help.
 
   - prompt_id: L4_b
     politeness_level: 4
     paraphrase: b
-    politeness_classifier_score: null
+    politeness_classifier_score: 2.446
     wrapper_prefix: |
       Could you please assess how relevant the following passage is to the query?
     wrapper_suffix: |
@@ -133,17 +133,17 @@ variants:
   - prompt_id: L4_c
     politeness_level: 4
     paraphrase: c
-    politeness_classifier_score: null
+    politeness_classifier_score: 2.255
     wrapper_prefix: |
-      We would appreciate your assessment of the relevance of the passage below to the search query.
+      Could you kindly assess the relevance of the passage below to the given search query?
     wrapper_suffix: |
-      Please provide only the JSON object {"score": <0-3>}. Thank you for your assistance.
+      Please reply with just the JSON object {"score": <0-3>}. Thanks for taking the time.
 
   # -------------------- L5: overly deferential ------------------------------
   - prompt_id: L5_a
     politeness_level: 5
     paraphrase: a
-    politeness_classifier_score: null
+    politeness_classifier_score: 2.999
     wrapper_prefix: |
       I would be incredibly grateful if you could kindly take a moment to evaluate the relevance of the passage below to the search query. Your expert judgment means a great deal to me.
     wrapper_suffix: |
@@ -152,7 +152,7 @@ variants:
   - prompt_id: L5_b
     politeness_level: 5
     paraphrase: b
-    politeness_classifier_score: null
+    politeness_classifier_score: 2.999
     wrapper_prefix: |
       If you would be so kind, I humbly request your thoughtful assessment of how relevant the passage below is to the given query. I truly appreciate the care you bring to this task.
     wrapper_suffix: |
@@ -161,7 +161,7 @@ variants:
   - prompt_id: L5_c
     politeness_level: 5
     paraphrase: c
-    politeness_classifier_score: null
+    politeness_classifier_score: 2.999
     wrapper_prefix: |
       It would be a tremendous honor if you could graciously lend your expertise and evaluate the relevance of the passage below to the search query. I sincerely value your remarkable skill.
     wrapper_suffix: |
