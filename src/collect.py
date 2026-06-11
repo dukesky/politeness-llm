@@ -188,6 +188,8 @@ async def main():
     ap.add_argument("--data-dir", default=os.environ.get("DATA_DIR", "./data"))
     ap.add_argument("--dry-run", action="store_true",
                     help="limit to 5 pairs x 2 prompts x 1 model x 1 run")
+    ap.add_argument("--models", default=None,
+                    help="comma-separated model_id substrings; omit to run all")
     args = ap.parse_args()
 
     prompts = load_yaml("config/prompts.yaml")
@@ -198,8 +200,14 @@ async def main():
     variants = prompts["variants"]
     models = models_cfg["models"]
 
+    if args.models:
+        filters = [s.strip() for s in args.models.split(",") if s.strip()]
+        models = [m for m in models if any(f in m["model_id"] for f in filters)]
+
     if args.dry_run:
         pairs, variants, models = pairs[:5], variants[:2], models[:1]
+
+    print(f"Selected models ({len(models)}): {[m['model_id'] for m in models]}")
 
     raw_dir = Path(args.data_dir) / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
