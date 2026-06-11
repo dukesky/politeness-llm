@@ -124,6 +124,8 @@ async def call_one(session, sem, task, cfg, out_files, code_version):
         if model.get("provider_order"):
             payload["provider"] = {"order": model["provider_order"],
                                    "allow_fallbacks": False}
+        if cfg.get("reasoning_effort"):
+            payload["reasoning"] = {"effort": cfg["reasoning_effort"]}
 
         headers = {"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}
         last_err = None
@@ -194,10 +196,9 @@ async def main():
     pairs = [json.loads(l) for l in open(args.pairs)]
     variants = prompts["variants"]
     models = models_cfg["models"]
-    runs = range(1, cfg["n_runs"] + 1)
 
     if args.dry_run:
-        pairs, variants, models, runs = pairs[:5], variants[:2], models[:1], [1]
+        pairs, variants, models = pairs[:5], variants[:2], models[:1]
 
     raw_dir = Path(args.data_dir) / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -205,12 +206,14 @@ async def main():
     print(f"Resume: {len(done)} records already collected.")
 
     tasks = []
-    for model, variant, pair, run in product(models, variants, pairs, runs):
+    for model, variant, pair in product(models, variants, pairs):
         if model.get("subsample") and hash(pair["qid"]) % 100 >= model["subsample"] * 100:
             continue  # deterministic subsample for flagship tier
-        if key(model["model_id"], variant["prompt_id"],
-               pair["qid"], pair["docid"], run) not in done:
-            tasks.append((model, variant, pair, run))
+        model_runs = 1 if args.dry_run else model.get("n_runs", cfg["n_runs"])
+        for run in range(1, model_runs + 1):
+            if key(model["model_id"], variant["prompt_id"],
+                   pair["qid"], pair["docid"], run) not in done:
+                tasks.append((model, variant, pair, run))
     print(f"To collect: {len(tasks)} records.")
 
     out_files = {}
