@@ -39,7 +39,7 @@ models:
   - model_id: deepseek/deepseek-v4-flash
     tier: cheap
     family: deepseek
-    provider_order: ["DeepSeek"]            # DeepSeek official API — FP8 serving
+    provider_order: ["WandB"]               # WandB serving (账户可见的提供商；DeepSeek 官方端点被账户隐私设置过滤)
     price_per_m_input: 0.0983
     price_per_m_output: 0.1966
 
