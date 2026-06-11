@@ -14,7 +14,7 @@ import pandas as pd
 
 def load_raw(raw_dir: Path) -> pd.DataFrame:
     rows = []
-    for fp in sorted(raw_dir.glob("*.jsonl")):
+    for fp in sorted(raw_dir.rglob("*.jsonl")):
         with open(fp) as f:
             for line in f:
                 try:

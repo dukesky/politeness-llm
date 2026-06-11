@@ -91,7 +91,7 @@ def key(model_id, prompt_id, qid, docid, run):
 
 def scan_done(raw_dir: Path):
     done = set()
-    for fp in raw_dir.glob("*.jsonl"):
+    for fp in raw_dir.rglob("*.jsonl"):
         with open(fp) as f:
             for line in f:
                 try:
@@ -229,7 +229,9 @@ async def main():
     for model, variant, pair, run in tasks:
         fkey = (model["model_id"], variant["prompt_id"], run)
         if fkey not in out_files:
-            fp = raw_dir / f"{slug(model['model_id'])}__{variant['prompt_id']}__run{run}.jsonl"
+            model_dir = raw_dir / slug(model['model_id'])
+            model_dir.mkdir(parents=True, exist_ok=True)
+            fp = model_dir / f"{variant['prompt_id']}__run{run}.jsonl"
             out_files[fkey] = open(fp, "a")
 
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
