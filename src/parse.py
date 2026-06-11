@@ -22,6 +22,7 @@ def load_raw(raw_dir: Path) -> pd.DataFrame:
                 except json.JSONDecodeError:
                     continue  # torn final line from a crash
                 u = r.get("usage") or {}
+                details = u.get("completion_tokens_details") or {}
                 rows.append({
                     "model_id": r["model_id"],
                     "provider": r.get("provider"),
@@ -35,6 +36,8 @@ def load_raw(raw_dir: Path) -> pd.DataFrame:
                     "parse_ok": r["parse_ok"],
                     "tokens_in": u.get("prompt_tokens"),
                     "tokens_out": u.get("completion_tokens"),
+                    "tokens_reasoning": details.get("reasoning_tokens"),
+                    "cost_usd_reported": u.get("cost"),
                     "latency_s": r.get("latency_s"),
                     "code_version": r.get("code_version"),
                 })

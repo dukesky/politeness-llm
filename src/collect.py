@@ -124,8 +124,9 @@ async def call_one(session, sem, task, cfg, out_files, code_version):
         if model.get("provider_order"):
             payload["provider"] = {"order": model["provider_order"],
                                    "allow_fallbacks": False}
-        if cfg.get("reasoning_effort"):
-            payload["reasoning"] = {"effort": cfg["reasoning_effort"]}
+        effort = model.get("reasoning_effort", cfg.get("reasoning_effort"))
+        if effort:
+            payload["reasoning"] = {"effort": effort}
 
         headers = {"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}
         last_err = None
