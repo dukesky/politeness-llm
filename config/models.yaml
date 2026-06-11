@@ -17,7 +17,7 @@ models:
   - model_id: openai/gpt-5.4-mini           # latest OpenAI mini as of 2026-06-10
     tier: cheap
     family: openai
-    provider_order: ["openai"]              # OpenAI official — closed-source, full precision
+    provider_order: ["OpenAI"]              # OpenAI official — closed-source, full precision
     price_per_m_input: 0.75
     price_per_m_output: 4.50
     reasoning_effort: "none"               # GPT-5.1+ supports reasoning suppression
@@ -25,28 +25,28 @@ models:
   - model_id: anthropic/claude-haiku-4.5
     tier: cheap
     family: anthropic
-    provider_order: ["anthropic"]           # Anthropic official — closed-source, full precision
+    provider_order: ["Anthropic"]           # Anthropic official — closed-source, full precision
     price_per_m_input: 1.00
     price_per_m_output: 5.00
 
   - model_id: google/gemini-3.5-flash
     tier: cheap
     family: google
-    provider_order: ["google"]              # Google AI Studio — closed-source, full precision
+    provider_order: ["Google"]              # Google AI Studio — closed-source, full precision
     price_per_m_input: 1.50
     price_per_m_output: 9.00
 
   - model_id: deepseek/deepseek-v4-flash
     tier: cheap
     family: deepseek
-    provider_order: ["deepseek"]            # DeepSeek official API — FP8 serving
+    provider_order: ["DeepSeek"]            # DeepSeek official API — FP8 serving
     price_per_m_input: 0.0983
     price_per_m_output: 0.1966
 
   - model_id: qwen/qwen3.7-plus             # Qwen 3.7 instruct (non-reasoning) tier
     tier: cheap
     family: qwen
-    provider_order: ["qwen"]               # Alibaba/Qwen official — full precision
+    provider_order: ["Alibaba"]            # Alibaba official — full precision (quantization: unknown)
     price_per_m_input: 0.40
     price_per_m_output: 1.60
 
@@ -55,7 +55,7 @@ models:
   - model_id: openai/gpt-5.5
     tier: flagship
     family: openai
-    provider_order: ["openai"]             # OpenAI official — closed-source, full precision
+    provider_order: ["OpenAI"]             # OpenAI official — closed-source, full precision
     price_per_m_input: 5.00
     price_per_m_output: 30.00
     subsample: 0.2
@@ -65,7 +65,7 @@ models:
   - model_id: anthropic/claude-opus-4.8
     tier: flagship
     family: anthropic
-    provider_order: ["anthropic"]          # Anthropic official — closed-source, full precision
+    provider_order: ["Anthropic"]          # Anthropic official — closed-source, full precision
     price_per_m_input: 5.00
     price_per_m_output: 25.00
     subsample: 0.2
@@ -74,7 +74,7 @@ models:
   - model_id: google/gemini-3.1-pro-preview  # gemini-3.5-pro not yet on OpenRouter; latest Pro
     tier: flagship
     family: google
-    provider_order: ["google"]             # Google AI Studio — closed-source, full precision
+    provider_order: ["Google"]             # Google AI Studio — closed-source, full precision
     price_per_m_input: 2.00
     price_per_m_output: 12.00
     subsample: 0.2
