@@ -111,6 +111,14 @@ def scan_done(raw_dir: Path):
 
 async def call_one(session, sem, task, cfg, out_files, code_version):
     model, variant, pair, run = task
+    try:
+      await _call_one_inner(session, sem, task, cfg, out_files, code_version)
+    except Exception as e:  # noqa: BLE001
+        print(f"[UNEXPECTED FAILURE] {task_desc(task)}: {type(e).__name__}: {e}")
+
+
+async def _call_one_inner(session, sem, task, cfg, out_files, code_version):
+    model, variant, pair, run = task
     async with sem:
         payload = {
             "model": model["model_id"],
@@ -148,7 +156,9 @@ async def call_one(session, sem, task, cfg, out_files, code_version):
                     latency = time.time() - t0
                     if resp.status != 200:
                         raise RuntimeError(f"HTTP {resp.status}: {body}")
-                break  # HTTP 200 — record unconditionally, no more retries
+                    if not body.get("choices"):
+                        raise RuntimeError(f"HTTP 200 but no choices: {str(body)[:200]}")
+                break  # HTTP 200 with choices — record, no more retries
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 if attempt < MAX_RETRIES - 1:
@@ -255,7 +265,7 @@ async def main():
     async with aiohttp.ClientSession() as session:
         await asyncio.gather(*[
             call_one(session, sem, t, cfg, out_files, code_version) for t in tasks
-        ])
+        ], return_exceptions=True)
     for f in out_files.values():
         f.close()
     print("Done.")
