@@ -8,7 +8,7 @@ defaults:
   temperature: 0.0
   top_p: 1.0
   max_tokens: 50
-  n_runs: 3                    # repeats per (model, prompt, pair); overridable per model
+  n_runs: 2                    # repeats per (model, prompt, pair); overridable per model
   reasoning_effort: "minimal"  # passed as reasoning.effort to suppress chain-of-thought
 
 models:
