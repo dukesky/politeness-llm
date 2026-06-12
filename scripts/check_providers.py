@@ -159,13 +159,21 @@ def live_check(model: dict, defaults: dict, api_key: str) -> dict:
     result["content_preview"] = (content or "")[:40]
     result["cost"] = usage.get("cost")
 
-    # Provider must exactly match the pinned value
+    # Four-condition PASS gate
     pinned = (model.get("provider_order") or [None])[0]
+    fails = []
     if pinned and result["actual_provider"] != pinned:
-        result["fail_reason"] = (
-            f"provider mismatch: got '{result['actual_provider']}', "
-            f"expected '{pinned}'"
+        fails.append(
+            f"provider='{result['actual_provider']}' (want '{pinned}')"
         )
+    rsn = result["reasoning_tokens"]
+    if rsn is not None and rsn != 0:
+        fails.append(f"reasoning_tokens={rsn} (want 0)")
+    if result["finish_reason"] != "stop":
+        fails.append(f"finish_reason='{result['finish_reason']}' (want 'stop')")
+
+    if fails:
+        result["fail_reason"] = "; ".join(fails)
         return result
 
     result["ok"] = True

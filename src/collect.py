@@ -134,7 +134,10 @@ async def _call_one_inner(session, sem, task, cfg, out_files, code_version):
         if model.get("provider_order"):
             payload["provider"] = {"order": model["provider_order"],
                                    "allow_fallbacks": False}
-        if model.get("reasoning_mode") == "disabled":
+        reasoning_mode = model.get("reasoning_mode")
+        if reasoning_mode == "omit":
+            pass  # send no reasoning param (Anthropic: thinking off by default)
+        elif reasoning_mode == "disabled":
             payload["reasoning"] = {"enabled": False}
         else:
             effort = model.get("reasoning_effort", cfg.get("reasoning_effort"))

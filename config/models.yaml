@@ -28,6 +28,7 @@ models:
     provider_order: ["Anthropic"]           # Anthropic official — closed-source, full precision
     price_per_m_input: 1.00
     price_per_m_output: 5.00
+    reasoning_mode: "omit"                 # Anthropic: no reasoning param; effort:minimal enables thinking
 
   - model_id: google/gemini-3.5-flash
     tier: cheap
@@ -50,6 +51,7 @@ models:
     provider_order: ["Alibaba"]            # Alibaba official — full precision (quantization: unknown)
     price_per_m_input: 0.40
     price_per_m_output: 1.60
+    reasoning_mode: "disabled"             # sends reasoning.enabled=false to suppress native CoT
 
   # ── flagship tier (20 % subsample, 1 run — reference only) ───────────────
 
@@ -71,6 +73,7 @@ models:
     price_per_m_output: 25.00
     subsample: 0.2
     n_runs: 1
+    reasoning_mode: "omit"                # Anthropic: no reasoning param; effort:minimal enables thinking
 
   - model_id: google/gemini-3.1-pro-preview  # gemini-3.5-pro not yet on OpenRouter; latest Pro
     tier: flagship
@@ -80,3 +83,4 @@ models:
     price_per_m_output: 12.00
     subsample: 0.2
     n_runs: 1
+    reasoning_mode: "disabled"             # sends reasoning.enabled=false to suppress native CoT
