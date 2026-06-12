@@ -1,0 +1,189 @@
+% Core references for "Tone Sensitivity of LLM Relevance Judges"
+% bibkey style: FirstAuthorSurname+Year+FirstContentWord
+% note field: peer-reviewed | preprint
+
+% ── Peer-reviewed ────────────────────────────────────────────────────────────
+
+@inproceedings{arabzadeh2025prompt,
+  author    = {Negar Arabzadeh and Charles L. A. Clarke},
+  title     = {A Human-{AI} Comparative Analysis of Prompt Sensitivity in
+               {LLM}-Based Relevance Judgment},
+  booktitle = {Proceedings of the 48th International ACM SIGIR Conference on
+               Research and Development in Information Retrieval},
+  year      = {2025},
+  eprint    = {2504.12408},
+  archivePrefix = {arXiv},
+  note      = {peer-reviewed. SIGIR 2025. \textbf{Nearest prior work}: studies
+               wording/source diversity, not tone; proposes no strictness mechanism.}
+}
+
+@inproceedings{yin2024respect,
+  author    = {Ziqi Yin and Hao Wang and Kaito Sugimoto and Chenhan Yuan
+               and Nguyen Ngoc Duc and Fei Cheng and Sadao Kurohashi},
+  title     = {Should We Respect {LLMs}? {A} Cross-Lingual Study on the
+               Influence of Prompt Politeness on {LLM} Performance},
+  booktitle = {Proceedings of the 1st Workshop on Social Influence in
+               Conversations (SICon) at ACL 2024},
+  year      = {2024},
+  pages     = {2--14},
+  eprint    = {2402.14531},
+  archivePrefix = {arXiv},
+  note      = {peer-reviewed. SICon @ ACL 2024 (2024.sicon-1.2). Generative
+               tasks only (MCQ/QA); finds rudeness harmful; no classifier
+               calibration of politeness levels.}
+}
+
+@inproceedings{thomas2024searcher,
+  author    = {Paul Thomas and Seth Spielman and Nick Craswell and Bhaskar Mitra},
+  title     = {Large Language Models can Accurately Predict Searcher Preferences},
+  booktitle = {Proceedings of the 47th International ACM SIGIR Conference on
+               Research and Development in Information Retrieval},
+  year      = {2024},
+  eprint    = {2309.10621},
+  archivePrefix = {arXiv},
+  note      = {peer-reviewed. SIGIR 2024. Establishes LLM-as-judge as reliable
+               for IR evaluation; baseline for our validity-threat framing.}
+}
+
+@inproceedings{faggioli2023perspectives,
+  author    = {Guglielmo Faggioli and Laura Dietz and Charles L. A. Clarke
+               and Gianluca Demartini and Matthias Hagen and Claudia Hauff
+               and Norbert Fuhr and Benno Stein and Johanne R. Trippas
+               and Nicola Ferro},
+  title     = {Perspectives on Large Language Models for Relevance Judgment},
+  booktitle = {Proceedings of the 2023 ACM SIGIR International Conference on
+               Theory of Information Retrieval (ICTIR)},
+  year      = {2023},
+  eprint    = {2304.09161},
+  archivePrefix = {arXiv},
+  note      = {peer-reviewed. ICTIR 2023. Foundational framing of LLM-based
+               relevance judgment and its validity concerns.}
+}
+
+@inproceedings{sclar2024formatspread,
+  author    = {Melanie Sclar and Yejin Choi and Yulia Tsvetkov and Alane Suhr},
+  title     = {Quantifying Language Models' Sensitivity to Spurious Features
+               in Prompt Design or: How I Learned to Start Worrying about
+               Prompt Formatting},
+  booktitle = {The Twelfth International Conference on Learning Representations
+               (ICLR)},
+  year      = {2024},
+  eprint    = {2310.11324},
+  archivePrefix = {arXiv},
+  note      = {peer-reviewed. ICLR 2024. FormatSpread; shows surface-level
+               prompt features cause large performance variance; contextualises
+               our tone-as-input-feature framing.}
+}
+
+% ── Preprints ────────────────────────────────────────────────────────────────
+
+@misc{dobariya2025tone,
+  author        = {Kirtan Dobariya and Abhishek Kumar},
+  title         = {Mind Your Tone},
+  year          = {2025},
+  eprint        = {2510.04950},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+  note          = {preprint. \textbf{Caution}: small-sample (50 questions ×
+                   10 runs, ~4 pt delta); finds rudeness \emph{more accurate}
+                   — opposite pole from Yin et al.\ 2024; partially rebutted
+                   by Cai et al.\ 2025. Cite only as contradiction pole.}
+}
+
+@misc{upadhyay2024umbrela,
+  author        = {Shivani Upadhyay and Ronak Pradeep and Nandan Thakur
+                   and Daniel Campos and Nick Craswell and Ian Soboroff
+                   and Hoa Trang Dang and Jimmy Lin},
+  title         = {{UMBRELA}: {UMbrela} is the {Bing} {RELevance} Assessor},
+  year          = {2024},
+  eprint        = {2406.06519},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.IR},
+  note          = {preprint (resource). UMBRELA 0-3 scale adopted as our
+                   pointwise judgment rubric.}
+}
+
+@misc{arabzadeh2025benchmarking,
+  author        = {Negar Arabzadeh and Ehsan Kamalloo and Xinyu Zhang
+                   and Charles L. A. Clarke},
+  title         = {Benchmarking {LLM}-based Relevance Judgment Methods},
+  year          = {2025},
+  eprint        = {2504.12558},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.IR},
+  note          = {preprint. Same group as arabzadeh2025prompt but different
+                   paper (do NOT merge). Broader benchmark of LLM-judge methods.}
+}
+
+@misc{cai2025tone,
+  author        = {Jiawei Cai and others},
+  title         = {Does Tone Change the Answer?},
+  year          = {2025},
+  eprint        = {2512.12812},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+  note          = {preprint. Generative tasks; partially rebuts Dobariya \&
+                   Kumar 2025 (rudeness-beneficial finding). No IR judging.}
+}
+
+@misc{rahmani2024llmjudge,
+  author        = {Hossein A. Rahmani and Emine Yilmaz and Nick Craswell
+                   and Bhaskar Mitra},
+  title         = {{LLMJudge}: {LLM}s as Relevance Judges at {LLM4Eval@SIGIR}},
+  year          = {2024},
+  eprint        = {2408.08896},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.IR},
+  note          = {preprint. LLM4Eval @ SIGIR 2024 challenge overview;
+                   benchmarks LLM judge reliability.}
+}
+
+@misc{rahmani2025judging,
+  author        = {Hossein A. Rahmani and Emine Yilmaz and Nick Craswell
+                   and Bhaskar Mitra},
+  title         = {Judging the Judges},
+  year          = {2025},
+  eprint        = {2502.13908},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.IR},
+  note          = {preprint. Follow-up to rahmani2024llmjudge; meta-analysis
+                   of LLM-as-judge consistency and inter-model agreement.}
+}
+
+@misc{li2023emotionprompt,
+  author        = {Cheng Li and Jindong Wang and Yixuan Zhang and Kaijie Zhu
+                   and Wenxin Hou and Jianxun Lian and Fang Luo and Qiang Yang
+                   and Xing Xie},
+  title         = {{EmotionPrompt}: Leveraging Psychology for Large Language
+                   Models Enhancement via Emotional Stimulus},
+  year          = {2023},
+  eprint        = {2307.11760},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.AI},
+  note          = {preprint. Emotional/motivational framing improves LLM
+                   performance; related mechanism to tone-as-stimulus.
+                   See also replication2024crisis for replication concerns.}
+}
+
+@misc{replication2024crisis,
+  author        = {Andreas Kopf and others},
+  title         = {A Looming Replication Crisis in Evaluating Behavior in
+                   Language Models?},
+  year          = {2024},
+  eprint        = {2409.20303},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+  note          = {preprint. Raises replication concerns for EmotionPrompt
+                   and similar work; contextualises robustness of tone findings.}
+}
+
+@misc{cost2026judge,
+  author        = {Anonymous},
+  title         = {On Cost-Effective {LLM}-as-a-Judge Improvement Techniques},
+  year          = {2026},
+  eprint        = {2604.13717},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+  note          = {preprint. Cost-quality trade-offs in LLM judging;
+                   directly relevant to our RQ3 cost-efficiency analysis.}
+}
