@@ -29,6 +29,7 @@ models:
     price_per_m_input: 1.00
     price_per_m_output: 5.00
     reasoning_mode: "omit"                 # Anthropic: no reasoning param; effort:minimal enables thinking
+    rpm_limit: 100                         # OpenRouter global cap 125 RPM; stay below with margin
 
   - model_id: google/gemini-3.5-flash
     tier: cheap

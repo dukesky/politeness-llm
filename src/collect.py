@@ -24,6 +24,7 @@ import argparse
 import asyncio
 import json
 import os
+import random
 import re
 import subprocess
 import time
@@ -32,10 +33,31 @@ from pathlib import Path
 
 import aiohttp
 import yaml
+from aiolimiter import AsyncLimiter
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MAX_CONCURRENCY = 10
 MAX_RETRIES = 4
+MAX_429_WAIT = 30 * 60   # give up on a task after 30 min of 429 back-off
+MAX_429_BACKOFF = 120    # exponential back-off ceiling (seconds)
+
+
+def _compute_429_wait(body: dict, n_429: int) -> float:
+    """Return seconds to sleep after a 429. Uses X-RateLimit-Reset when available,
+    otherwise exponential back-off (15s base, 120s ceiling). Always adds 0-1s jitter."""
+    try:
+        reset_ms = (
+            body.get("error", {})
+                .get("metadata", {})
+                .get("headers", {})
+                .get("X-RateLimit-Reset")
+        )
+        if reset_ms is not None:
+            wait = max(0.0, int(reset_ms) / 1000 - time.time())
+            return wait + random.uniform(0, 1)
+    except Exception:
+        pass
+    return min(MAX_429_BACKOFF, 15.0 * (2 ** n_429)) + random.uniform(0, 1)
 
 
 # --------------------------------------------------------------------------
@@ -109,15 +131,15 @@ def scan_done(raw_dir: Path):
 # API call
 # --------------------------------------------------------------------------
 
-async def call_one(session, sem, task, cfg, out_files, code_version):
+async def call_one(session, sem, task, cfg, out_files, code_version, limiters):
     model, variant, pair, run = task
     try:
-      await _call_one_inner(session, sem, task, cfg, out_files, code_version)
+        await _call_one_inner(session, sem, task, cfg, out_files, code_version, limiters)
     except Exception as e:  # noqa: BLE001
         print(f"[UNEXPECTED FAILURE] {task_desc(task)}: {type(e).__name__}: {e}")
 
 
-async def _call_one_inner(session, sem, task, cfg, out_files, code_version):
+async def _call_one_inner(session, sem, task, cfg, out_files, code_version, limiters):
     model, variant, pair, run = task
     async with sem:
         payload = {
@@ -145,28 +167,52 @@ async def _call_one_inner(session, sem, task, cfg, out_files, code_version):
                 payload["reasoning"] = {"effort": effort}
 
         headers = {"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}
-        # Only network-level failures (non-200, timeout, connection error) are retried.
-        # HTTP 200 with empty/None content is recorded as-is — it's data, not an error.
+        limiter = limiters.get(model["model_id"])
+
+        # Retry loop: non-200/timeout/connection errors use MAX_RETRIES w/ exp backoff.
+        # 429s are handled separately (unlimited retries, 30-min cumulative cap).
+        # HTTP 200 is always recorded — empty content is data, not an error.
+        attempt = 0
+        n_429 = 0
+        total_429_wait = 0.0
         last_err = None
         body = None
         latency = None
-        for attempt in range(MAX_RETRIES):
+
+        while attempt < MAX_RETRIES:
+            if limiter:
+                async with limiter:
+                    pass  # wait for a rate-limit token before each request
             try:
                 t0 = time.time()
                 async with session.post(OPENROUTER_URL, json=payload,
                                         headers=headers, timeout=120) as resp:
                     body = await resp.json()
                     latency = time.time() - t0
+                    if resp.status == 429:
+                        wait = _compute_429_wait(body, n_429)
+                        total_429_wait += wait
+                        n_429 += 1
+                        if total_429_wait > MAX_429_WAIT:
+                            print(f"[FAILED 429 >30min] {task_desc(task)}: "
+                                  f"cumulative wait {total_429_wait:.0f}s")
+                            return
+                        print(f"[429] {task_desc(task)}: sleeping {wait:.1f}s "
+                              f"(cumulative {total_429_wait:.0f}s)")
+                        await asyncio.sleep(wait)
+                        continue  # retry without counting against attempt
                     if resp.status != 200:
                         raise RuntimeError(f"HTTP {resp.status}: {body}")
                     if not body.get("choices"):
                         raise RuntimeError(f"HTTP 200 but no choices: {str(body)[:200]}")
-                break  # HTTP 200 with choices — record, no more retries
+                break  # HTTP 200 with choices — exit retry loop
             except Exception as e:  # noqa: BLE001
                 last_err = e
-                if attempt < MAX_RETRIES - 1:
-                    await asyncio.sleep(2 ** attempt)
-        else:
+                attempt += 1
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(2 ** (attempt - 1))
+
+        if attempt >= MAX_RETRIES:
             print(f"[FAILED after {MAX_RETRIES} tries] {task_desc(task)}: {last_err}")
             return
 
@@ -263,11 +309,20 @@ async def main():
             fp = model_dir / f"{variant['prompt_id']}__run{run}.jsonl"
             out_files[fkey] = open(fp, "a")
 
+    limiters = {
+        m["model_id"]: AsyncLimiter(m["rpm_limit"], 60)
+        for m in models_cfg["models"]
+        if m.get("rpm_limit")
+    }
+    if limiters:
+        print(f"Rate limiters active: { {k: v.max_rate for k, v in limiters.items()} }")
+
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
     code_version = git_hash()
     async with aiohttp.ClientSession() as session:
         await asyncio.gather(*[
-            call_one(session, sem, t, cfg, out_files, code_version) for t in tasks
+            call_one(session, sem, t, cfg, out_files, code_version, limiters)
+            for t in tasks
         ], return_exceptions=True)
     for f in out_files.values():
         f.close()
