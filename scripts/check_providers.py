@@ -111,7 +111,10 @@ def build_payload(model: dict, defaults: dict) -> dict:
             "order": model["provider_order"],
             "allow_fallbacks": False,
         }
-    if model.get("reasoning_mode") == "disabled":
+    reasoning_mode = model.get("reasoning_mode")
+    if reasoning_mode in ("omit", "mandatory"):
+        pass  # send no reasoning param
+    elif reasoning_mode == "disabled":
         payload["reasoning"] = {"enabled": False}
     else:
         effort = model.get("reasoning_effort", defaults.get("reasoning_effort"))
@@ -159,18 +162,27 @@ def live_check(model: dict, defaults: dict, api_key: str) -> dict:
     result["content_preview"] = (content or "")[:40]
     result["cost"] = usage.get("cost")
 
-    # Four-condition PASS gate
     pinned = (model.get("provider_order") or [None])[0]
+    mandatory = model.get("reasoning_mode") == "mandatory"
     fails = []
+
     if pinned and result["actual_provider"] != pinned:
-        fails.append(
-            f"provider='{result['actual_provider']}' (want '{pinned}')"
-        )
-    rsn = result["reasoning_tokens"]
-    if rsn is not None and rsn != 0:
-        fails.append(f"reasoning_tokens={rsn} (want 0)")
+        fails.append(f"provider='{result['actual_provider']}' (want '{pinned}')")
+
     if result["finish_reason"] != "stop":
         fails.append(f"finish_reason='{result['finish_reason']}' (want 'stop')")
+
+    rsn = result["reasoning_tokens"]
+    if mandatory:
+        # reasoning_tokens may be >0; check content has parseable JSON instead
+        import re as _re
+        raw = result["content_preview"] or ""
+        if not _re.search(r"\{[^{}]*\}", raw):
+            fails.append(f"reasoning-native but no JSON in content preview")
+        # always print actual reasoning_tokens (informational, not a fail criterion)
+    else:
+        if rsn is not None and rsn != 0:
+            fails.append(f"reasoning_tokens={rsn} (want 0)")
 
     if fails:
         result["fail_reason"] = "; ".join(fails)

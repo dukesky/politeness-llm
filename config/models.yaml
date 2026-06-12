@@ -73,9 +73,9 @@ models:
     price_per_m_output: 25.00
     subsample: 0.2
     n_runs: 1
-    reasoning_mode: "omit"                # Anthropic: no reasoning param; effort:minimal enables thinking
+    reasoning_mode: "disabled"            # final attempt to zero reasoning_tokens
 
-  - model_id: google/gemini-3.1-pro-preview  # gemini-3.5-pro not yet on OpenRouter; latest Pro
+  - model_id: google/gemini-3.1-pro-preview  # gemini-3.5-pro not yet on OpenRouter; reasoning-native
     tier: flagship
     family: google
     provider_order: ["Google"]             # Google AI Studio — closed-source, full precision
@@ -83,4 +83,5 @@ models:
     price_per_m_output: 12.00
     subsample: 0.2
     n_runs: 1
-    reasoning_mode: "disabled"             # sends reasoning.enabled=false to suppress native CoT
+    reasoning_mode: "mandatory"            # API forces reasoning; reasoning_tokens > 0 expected
+    max_tokens: 4000                       # reasoning eats into max_tokens; raise to prevent truncation

@@ -124,7 +124,7 @@ async def _call_one_inner(session, sem, task, cfg, out_files, code_version):
             "model": model["model_id"],
             "temperature": cfg["temperature"],
             "top_p": cfg["top_p"],
-            "max_tokens": cfg["max_tokens"],
+            "max_tokens": model.get("max_tokens", cfg["max_tokens"]),
             "messages": [{
                 "role": "user",
                 "content": compose_prompt(variant, cfg["rubric"],
@@ -135,8 +135,8 @@ async def _call_one_inner(session, sem, task, cfg, out_files, code_version):
             payload["provider"] = {"order": model["provider_order"],
                                    "allow_fallbacks": False}
         reasoning_mode = model.get("reasoning_mode")
-        if reasoning_mode == "omit":
-            pass  # send no reasoning param (Anthropic: thinking off by default)
+        if reasoning_mode in ("omit", "mandatory"):
+            pass  # send no reasoning param
         elif reasoning_mode == "disabled":
             payload["reasoning"] = {"enabled": False}
         else:
