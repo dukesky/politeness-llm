@@ -15,6 +15,30 @@ this local repo is the single source of truth for code and configs.
 - After any code change: run `python -m py_compile src/*.py` and validate
   configs with `python -c "import yaml; yaml.safe_load(open('config/prompts.yaml'))"`.
 
+## 每模型验收流程（顺序固定，不得跳步）
+
+每个模型数据采集收齐后，严格按以下顺序执行：
+
+**Step A — 分布预检（盲态）**
+```bash
+python scripts/preflight_distributions.py --model <model_id> --data-dir $DATA_DIR
+```
+此步仅看分数分布和 Δ/D 值，**不得运行 src/metrics.py 或任何含 kappa 的脚本**。
+
+**Step B — 登记预测并 commit**
+将 preflight 输出的粘贴块填入 `paper/PREDICTIONS.md`，填写盲态声明，commit。
+commit 时间戳即为预测冻结时间，**commit 后不得修改预测**。
+
+**Step C — 验收脚本（开箱）**
+运行含 kappa 的验收脚本（`src/metrics.py` / `notebooks/02_analysis.ipynb`）。
+将 κ 实际值和命中/未中/tie 回填到 PREDICTIONS.md 对应登记记录的"开箱结果"栏，commit。
+
+**盲态标注规则**：
+- `blind`：Step A 前未见过该模型的 κ 或一致性指标
+- `non-blind`：已因任何原因（调试、dry-run 输出等）看过 κ，须说明原因
+- **haiku（anthropic/claude-haiku-4.5）和 gpt-5.4-mini（openai/gpt-5.4-mini）**：
+  若在协议建立前（2026-06-12 前）已暴露过 κ，标注 `non-blind（pre-protocol）`
+
 ## Novelty 定位（写作时直接取用）
 
 **核心声明**：首个研究"语气作为 IR relevance judge 严苛度工作点调节器"的工作。
