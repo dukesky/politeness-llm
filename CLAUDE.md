@@ -36,8 +36,8 @@ commit 时间戳即为预测冻结时间，**commit 后不得修改预测**。
 **盲态标注规则**：
 - `blind`：Step A 前未见过该模型的 κ 或一致性指标
 - `non-blind`：已因任何原因（调试、dry-run 输出等）看过 κ，须说明原因
-- **haiku（anthropic/claude-haiku-4.5）和 gpt-5.4-mini（openai/gpt-5.4-mini）**：
-  若在协议建立前（2026-06-12 前）已暴露过 κ，标注 `non-blind（pre-protocol）`
+- haiku（anthropic/claude-haiku-4.5）和 gpt-5.4-mini（openai/gpt-5.4-mini）：
+  κ 未暴露，按正常 blind 流程登记
 
 ## Novelty 定位（写作时直接取用）
 
