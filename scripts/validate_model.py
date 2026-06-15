@@ -3,8 +3,13 @@
 !! Run ONLY after Step B (prediction committed to paper/PREDICTIONS.md).
 
 Usage:
+    # cheap tier (full pairs)
     python scripts/validate_model.py --model openai/gpt-5.4-mini --data-dir $DATA_DIR
-    python scripts/validate_model.py --model anthropic/claude-haiku-4.5
+
+    # flagship tier (filter to frozen 40% sample)
+    python scripts/validate_model.py --model openai/gpt-5.5 --data-dir $DATA_DIR \\
+        --flagship-pairs $DATA_DIR/inputs/pairs_dl19_flagship40.jsonl \\
+                         $DATA_DIR/inputs/pairs_dl20_flagship40.jsonl
 """
 
 import argparse
@@ -40,6 +45,9 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", required=True)
     ap.add_argument("--data-dir", default=None)
+    ap.add_argument("--flagship-pairs", nargs="+", default=None, metavar="JSONL",
+                    help="one or more frozen pairs files; restricts analysis to "
+                         "those (qid, docid) pairs only (use for flagship models)")
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir or os.environ.get("DATA_DIR", "./data"))
@@ -51,6 +59,19 @@ def main():
     df = df_all[df_all.model_id == args.model].copy()
     if df.empty:
         sys.exit(f"ERROR: no rows for model '{args.model}' in {parquet}.")
+
+    if args.flagship_pairs:
+        import json
+        frozen = set()
+        for fp in args.flagship_pairs:
+            with open(fp) as f:
+                for line in f:
+                    p = json.loads(line)
+                    frozen.add((str(p["qid"]), str(p["docid"])))
+        before = len(df)
+        df = df[df.apply(lambda r: (str(r.qid), str(r.docid)) in frozen, axis=1)]
+        print(f"[flagship filter] {before} → {len(df)} rows "
+              f"({len(frozen)} frozen pairs × 15 variants × runs)")
 
     # add repo root to path so src.metrics is importable
     sys.path.insert(0, str(Path(__file__).parent.parent))
