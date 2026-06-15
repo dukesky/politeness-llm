@@ -20,6 +20,7 @@ Output: prints a registration block ready to paste into PREDICTIONS.md.
 """
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -90,6 +91,9 @@ def main():
     ap.add_argument("--data-dir",
                     default=None,
                     help="path to DATA_DIR (contains derived/judgments.parquet)")
+    ap.add_argument("--flagship-pairs", nargs="+", default=None, metavar="JSONL",
+                    help="frozen pairs files; restricts analysis to those (qid,docid) "
+                         "pairs only (use for flagship models)")
     args = ap.parse_args()
 
     import os
@@ -103,6 +107,17 @@ def main():
     df = df_all[df_all.model_id == args.model].copy()
     if df.empty:
         sys.exit(f"ERROR: no rows for model '{args.model}' in {parquet}.")
+
+    if args.flagship_pairs:
+        frozen = set()
+        for fp in args.flagship_pairs:
+            with open(fp) as f:
+                for line in f:
+                    p = json.loads(line)
+                    frozen.add((str(p["qid"]), str(p["docid"])))
+        before = len(df)
+        df = df[df.apply(lambda r: (str(r.qid), str(r.docid)) in frozen, axis=1)]
+        print(f"[flagship filter] {before} → {len(df)} rows ({len(frozen)} frozen pairs)")
 
     # ── Load qrels ────────────────────────────────────────────────────────────
     datasets_present = set(df.dataset.dropna().unique())
