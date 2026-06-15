@@ -22,7 +22,6 @@ already present, so the script can be killed/restarted at any time.
 
 import argparse
 import asyncio
-import hashlib
 import json
 import os
 import random
@@ -292,10 +291,6 @@ async def main():
 
     tasks = []
     for model, variant, pair in product(models, variants, pairs):
-        if model.get("subsample") and \
-                int(hashlib.md5(pair["qid"].encode()).hexdigest(), 16) % 100 \
-                >= model["subsample"] * 100:
-            continue  # deterministic subsample for flagship tier (md5: stable across processes)
         model_runs = 1 if args.dry_run else model.get("n_runs", cfg["n_runs"])
         for run in range(1, model_runs + 1):
             if key(model["model_id"], variant["prompt_id"],
