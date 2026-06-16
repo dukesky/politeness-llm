@@ -110,9 +110,11 @@ token median 7 与同档一致，非畸形）。判定：lawful——classifier 
 方法学披露：L2 档内 classifier 离散度达 0.2（0.534–0.732），需如实交代。
 
 ### gemini-pro reasoning × tone — exploratory（填文献空白）
-唯一 reasoning-native judge。reasoning token 随语气呈不对称 U（median）：
-L1=400 / L2=124 / L3=134 / L4=241 / L5=248。粗鲁档 L1 相对中性 +120%
-（三改写一致：471/446/488，非单条 artifact），礼貌档 +44%，中性最省。
+唯一 reasoning-native judge。reasoning token 随语气呈不对称 U；
+p50：L1=400 / L2=124 / L3=134 / L4=241 / L5=248；
+mean：L1=469 / L2=213 / L3=213 / L4=304 / L5=306。
+粗鲁档 L1 相对中性 +120%（均值口径；三改写 mean 一致：471/446/488，
+各自 p50=398/388/413，非单条 artifact），礼貌档 L5 +44%，中性最省。
 关键：L1 思考最多却 κ 最低（0.4222，全档最低）——多想未带来更高一致性、
 反而更差，于 IR judging 场景印证 reasoning-overthinking 文献（ReasonRR、
 inverse-scaling）。少数样本 p95 reasoning 逼近 max_tokens 4000，limitation
