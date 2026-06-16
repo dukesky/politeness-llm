@@ -12,6 +12,20 @@ LLM-based IR 评测中一个可预测的 validity threat。
 - arXiv 完整版 — 8 月上旬
 - ECIR 2027 short — 10 月截稿
 
+### 投稿硬约束（RecSys 2026 R&P Notes CfP）
+- **篇幅**：正文最长 2 页 + 第 3 页仅限参考文献/表/图，ACM 双栏模板。极紧。
+- **双盲**：必须匿名。正文不得出现 Snap / 作者姓名 / 机构；代码须挂
+  anonymous.4open.science，不能用真实 repo（dukesky/politeness-llm）。
+- **出版形式**：extended abstract，免 APC；接受则以海报形式展示，须一名作者
+  现场出席（Minneapolis, 9/28–10/2）。
+- **arXiv 时序**：
+  - 现在可挂**匿名版**抢时间戳；
+  - 评审期（7/15–8/10）不得上传非匿名版；
+  - 录用通知（8/10）后换署名版。
+  - EasyChair 提交表须声明已有 arXiv preprint。
+- **定位契合**：CfP 明确要求"early but promising"，不要求完整工作，完美匹配。
+  注：主会拒稿不可转投此 track（不影响本项目，首投即此 track）。
+
 ## 2. 核心论点（三条，论文骨架）
 
 ### 论点一：效应是 model-dependent 的（现象层）
@@ -157,15 +171,29 @@ inverse-scaling）。少数样本 p95 reasoning 逼近 max_tokens 4000，limitat
       (3) L5_a 三改写 score 分布对比柱状；(4) gemini-pro reasoning×档 柱状
 - [ ] L5_a / L2_c case study 文字化
 
-## 9. 写作 TODO（R&P Notes extended abstract）
-- [ ] Abstract：现象+机制+validity threat 三句
-- [ ] Intro：工作点存在性铺垫（引 Arabzadeh et al. 2025 的 leniency baseline：
-      LLM 比人多标 26% "perfectly relevant"）+ Yin/Dobariya 矛盾
-- [ ] Method：校准+改写对照+半盲预注册（卖点集中此节）
-- [ ] Results：§3 表 + Spearman 四层 + per-model
-- [ ] Discussion：机制（论点二讲透）+ L5_a/L2_c 对照 + reasoning exploratory
-- [ ] Limitations：§7 诚实边界
-- [ ] 关键引用见 paper/references.bib（12 篇 must-cite）
+## 9. 写作 TODO（2 页正文严格版，优先级排序）
+
+### 正文 2 页 — 必含（不可削减）
+- [ ] **Abstract**（~100 词）：现象 + 机制（Spearman ρ=−0.62）+ validity threat 一句
+- [ ] **Intro**（~0.3 页）：工作点存在性铺垫（引 Arabzadeh et al. 2025 leniency
+      baseline：LLM 比人多标 26% "perfectly relevant"）+ Yin/Dobariya 矛盾 → 本文
+- [ ] **Method**（~0.5 页，卖点集中此节）：
+      分类器校准礼貌档 + 改写对照（每档 3 改写，rubric 字节一致）+ 半盲预注册
+- [ ] **Results**（~0.6 页）：
+      model-dependence（8 模型 Δκ 鸟瞰）+ 机制验证（Spearman ρ=−0.62，稳健性一句）+
+      validity threat 启示；spurious sensitivity 至多一句提及并指向第 3 页附录
+- [ ] **Limitations / Conclusion**（~0.1 页）：§7 诚实边界精华，Spearman 相关非因果
+
+### 第 3 页（图表区，不计入正文页数）
+- [ ] 图/表 1：8 模型 Δκ×档 表（或折线热图）
+- [ ] 图/表 2：Spearman 散点 A vs Δκ（含稳健性 4 口径注）
+- [ ] References（剩余空间，≤12 篇）
+
+### 留给 arXiv 完整版（不进 R&P 正文）
+- 四层稳健性全表、混合效应模型、bootstrap CI
+- L5_a / L2_c case study 详细分析
+- gemini-pro reasoning × tone 完整探索
+- 关键引用见 paper/references.bib（12 篇 must-cite）
 
 ## 10. 配套文件索引
 - PREDICTIONS.md — 预注册凭证（预测+开箱+四层稳健性）
