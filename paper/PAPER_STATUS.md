@@ -63,6 +63,14 @@ ratio <1）。这回应并扩展了 Cai et al. 2025 的"语气效应 model/domai
   deepseek 3/4, qwen 2/4, mini 2/4, haiku 1/4。预测力随效应强度增强
   （漂移明显的模型达 4/4，效应近零的 haiku 1/4，符合"无信号时方向随机"）。
 
+### 论点二·补（排序证据）：语气威胁校准，不威胁排序
+语气显著改变 pointwise 一致性（κ），但几乎不改变派生排序质量：NDCG@10 语气
+敏感性全模型 <0.033（多数 <0.01，无结构），各档 vs L3 排序 Kendall τ 普遍高
+（0.74–0.94）。即语气移动绝对打分松紧度，而非 passage 相对顺序——独立于
+Spearman 直接佐证"语气拧松紧旋钮、不拧智力旋钮"。实践启示精炼为：基于绝对
+一致性的指标（κ）受威胁，基于排序的指标（NDCG）相对稳健。这条直接对接 RecSys
+排序/推荐评测语境。
+
 ### 论点三：可预测的 validity threat（实践启示）
 语气是 LLM-based IR 评测中一个【可预测的、系统性的】效度威胁。评测者不能
 假设语气在任何 judge 上都中性——在敏感模型（DeepSeek）上幅度可达 Δκ≈0.05。
@@ -163,12 +171,15 @@ inverse-scaling）。少数样本 p95 reasoning 逼近 max_tokens 4000，limitat
 - reasoning×tone 为单模型 exploratory。
 - L2 档内 classifier 离散度 0.2。
 - 二项检验 p≈0.06 不显著（功效受限），主检验为 Spearman。
+- 排序实验旗舰基于 40% 子样本，query 数少，NDCG/τ 数值噪声偏大。
 
 ## 8. 待补分析（写作并行）
 - [ ] 混合效应模型（model 随机效应）回应非独立性（W5 清单已列）
 - [ ] bootstrap ρ 的置信区间
 - [ ] 图表：(1) 8 模型 Δκ×档 折线/热图；(2) Spearman 散点 A vs Δκ；
-      (3) L5_a 三改写 score 分布对比柱状；(4) gemini-pro reasoning×档 柱状
+      (3) L5_a 三改写 score 分布对比柱状；(4) gemini-pro reasoning×档 柱状；
+      (5) NDCG/τ × 语气档 对比图
+- [x] 排序实验 R1(NDCG@10)+R2(Kendall τ) 已完成，结果见 OUTLINE_full.md §4.3
 - [ ] L5_a / L2_c case study 文字化
 
 ## 9. 写作 TODO（2 页正文严格版，优先级排序）
