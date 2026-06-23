@@ -176,9 +176,35 @@ inverse-scaling）。少数样本 p95 reasoning 逼近 max_tokens 4000，limitat
 ## 8. 待补分析（写作并行）
 - [ ] 混合效应模型（model 随机效应）回应非独立性（W5 清单已列）
 - [ ] bootstrap ρ 的置信区间
-- [ ] 图表：(1) 8 模型 Δκ×档 折线/热图；(2) Spearman 散点 A vs Δκ；
-      (3) L5_a 三改写 score 分布对比柱状；(4) gemini-pro reasoning×档 柱状；
-      (5) NDCG/τ × 语气档 对比图
+### 做图清单（Colab matplotlib → PDF → Overleaf \includegraphics）
+状态：数据齐全，代码待生成；优先级 P0>P1>P2
+
+- [ ] **P0 — 分数分布移动图**（§5.1 机制可视化，最高优先级）
+  横轴语气档 L1→L5，纵轴模型平均打分 s̄_ℓ，叠加人类 qrels 均分水平线。
+  展示 DeepSeek 在 L3 最宽松（离人类线最远）、L1/L5 两端变严靠近人类线。
+  直接证明"两端语气把工作点推向人类"。至少画 DeepSeek，可叠 1-2 对照模型。
+  数据来源：judgments.parquet 按 (model, politeness_level) 聚合 mean(score)；
+  qrels 均分（全量 0.9322 / 旗舰 40% 子样本 0.9857，注意口径）。
+
+- [ ] **P0 — Spearman 散点图**（§4.2 核心证据）
+  横轴 A(ℓ)，纵轴 κ(ℓ)−κ(L3)，28 个 (model,level) 点 + 负斜率拟合线，
+  DeepSeek 的点高亮标注。把 ρ=−0.62 变为肉眼可见。
+  这是 2 页 notes 唯一必保留的图。
+
+- [ ] **P1 — Δκ×语气档折线图**（§4.1 model-dependence）
+  横轴 L1→L5，纵轴 Δκ（相对 L3），每模型一条线。DeepSeek 呈 U 形、
+  其余贴近 0 线。可部分替代 Table 1（tab:main）的功能。
+
+- [ ] **P1 — κ vs NDCG 对比图**（§4.3 威胁校准不威胁排序）
+  同一横轴语气档，两条线：κ 变化（明显波动）vs NDCG 变化（基本平）。
+  替代当前 NDCG 表（tab:ndcg）——确认作图后删除该表，避免图表重复。
+
+- [ ] **P2（可选，完整版附录）— L5_a 分数分布柱状图**（§5.2 spurious 案例）
+  L5_a 分数挤向中间 vs 正常 L5 分布对比，可视化行为畸变。
+
+图表用图优先原则：能用图就不用表。已决定 NDCG（tab:ndcg）改图后删表；
+Spearman 四层（tab:spearman）notes 时用散点图替代、完整版图表并存。
+matplotlib 注意：CJK 不进图（纯英文 label）；导出 PDF 矢量图；T4 无关（纯绘图）。
 - [x] 排序实验 R1(NDCG@10)+R2(Kendall τ) 已完成，结果见 OUTLINE_full.md §4.3
 - [ ] L5_a / L2_c case study 文字化
 
