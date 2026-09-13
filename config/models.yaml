@@ -51,9 +51,13 @@ models:
   - model_id: deepseek/deepseek-v4-flash
     tier: cheap
     family: deepseek
-    provider_order: ["WandB"]               # WandB serving (账户可见的提供商；DeepSeek 官方端点被账户隐私设置过滤)
-    price_per_m_input: 0.0983
-    price_per_m_output: 0.1966
+    # Round-1 raw data was collected via WandB (fp8). WandB delisted this model
+    # by 2026-09-12 (check_providers FAIL), so round-2 anchor collection runs on
+    # Baidu — also fp8, uptime 99.997% — DISCLOSE this provider shift in the
+    # paper; cross-round DeepSeek comparisons carry a provider-change caveat.
+    provider_order: ["Baidu"]
+    price_per_m_input: 0.066
+    price_per_m_output: 0.131
     reasoning_mode: "disabled"             # sends reasoning.enabled=false to suppress native CoT
 
   - model_id: qwen/qwen3.7-plus             # Qwen 3.7 instruct (non-reasoning) tier
@@ -109,12 +113,11 @@ models:
     tier: cheap
     family: deepseek
     round: 2
-    # ⚠️ provider_order copied from the v4-flash (round-1) entry. DeepSeek's
-    # official endpoint is filtered out by this account's privacy settings, so
-    # WandB is the visible serving provider — but availability for *this* model
-    # has NOT been confirmed. Re-verify with scripts/check_providers.py before
-    # starting collection and update this list if WandB does not serve it.
-    provider_order: ["WandB"]
+    # WandB does not serve v4.1-flash (check_providers FAIL 2026-09-12).
+    # Pinned to DeepSeek first-party (uptime 99.997%), matching the other
+    # families' first-party pins. If the account's privacy settings filter the
+    # DeepSeek endpoint at request time, fall back to SiliconFlow (fp8, 100%).
+    provider_order: ["DeepSeek"]
     price_per_m_input: 0.15
     price_per_m_output: 0.60
     reasoning_mode: "disabled"             # sends reasoning.enabled=false to suppress native CoT
@@ -126,6 +129,9 @@ models:
     provider_order: ["Google"]             # Google AI Studio — closed-source, full precision
     price_per_m_input: 0.75                # pricing.prompt      7.5e-7 × 1e6
     price_per_m_output: 3.75               # pricing.completion  3.75e-6 × 1e6
+    reasoning_mode: "disabled"             # audit 2026-09-12 showed 161 rsn_tok by
+                                           # default; re-audit must show rsn_tok=0,
+                                           # else reclassify as reasoning-native
 
   # ── round 2, flagship tier (20 % subsample, 1 run) ───────────────────────
 
