@@ -12,9 +12,18 @@ agreement metric. It only reports score distributions and the inputs
 needed to apply the prediction rules in paper/PREDICTIONS.md.
 
 Usage (from repo root on Colab):
+    # round 1 (default, unchanged v1 behaviour)
     python scripts/preflight_distributions.py \\
         --model deepseek/deepseek-v4-flash \\
         --data-dir /content/drive/MyDrive/llm-ranker-tone-data
+
+    # round 2
+    python scripts/preflight_distributions.py \\
+        --model deepseek/deepseek-v4.1-flash --datasets dl21,dl22,antique \\
+        --data-dir $DATA_DIR
+
+dl22 note: distribution preflight on dl22 is ALLOWED — this stage is blind.
+Only kappa / agreement metrics are sealed (see src/qrels.py).
 
 Output: prints a registration block ready to paste into PREDICTIONS.md.
 """
@@ -27,10 +36,9 @@ from pathlib import Path
 
 import pandas as pd
 
-DATASETS = {
-    "dl19": "msmarco-passage/trec-dl-2019/judged",
-    "dl20": "msmarco-passage/trec-dl-2020/judged",
-}
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.qrels import SEALED, parse_datasets  # noqa: E402
+from src.qrels import load_qrels as _load_qrels  # noqa: E402
 
 LEVELS = [1, 2, 3, 4, 5]
 SCORES = [0, 1, 2, 3]
@@ -38,23 +46,19 @@ NO_CALL_THRESHOLD = 0.02
 DELTA_MIN = 0.01   # |Δ| < this → no-call regardless of D
 
 
-def load_qrels(datasets_present: set[str]) -> dict:
-    """Load qrels from ir_datasets for all datasets in the parquet."""
+def load_qrels(datasets: list) -> dict:
+    """Dataset-keyed qrels on the common 0-3 scale (src/qrels.py).
+
+    Missing ir_datasets is non-fatal here: this stage still prints the score
+    distributions, it just cannot compute Δ.
+    """
     try:
-        import ir_datasets
+        import ir_datasets  # noqa: F401
     except ImportError:
         print("WARNING: ir_datasets not installed; qrels mean will be 'N/A'.",
               file=sys.stderr)
         return {}
-
-    qrels = {}
-    for ds_name in datasets_present:
-        if ds_name not in DATASETS:
-            continue
-        ds = ir_datasets.load(DATASETS[ds_name])
-        for j in ds.qrels_iter():
-            qrels[(j.query_id, j.doc_id)] = int(j.relevance)
-    return qrels
+    return _load_qrels(list(datasets))
 
 
 def git_hash() -> str:
@@ -91,6 +95,9 @@ def main():
     ap.add_argument("--data-dir",
                     default=None,
                     help="path to DATA_DIR (contains derived/judgments.parquet)")
+    ap.add_argument("--datasets", default="dl19,dl20",
+                    help="comma-separated dataset names to analyse "
+                         "(default: dl19,dl20 = round 1). Round 2: dl21,dl22,antique")
     ap.add_argument("--flagship-pairs", nargs="+", default=None, metavar="JSONL",
                     help="frozen pairs files; restricts analysis to those (qid,docid) "
                          "pairs only (use for flagship models)")
@@ -103,10 +110,30 @@ def main():
     if not parquet.exists():
         sys.exit(f"ERROR: {parquet} not found. Run src/parse.py first.")
 
+    datasets = parse_datasets(args.datasets)
+
     df_all = pd.read_parquet(parquet)
     df = df_all[df_all.model_id == args.model].copy()
     if df.empty:
         sys.exit(f"ERROR: no rows for model '{args.model}' in {parquet}.")
+
+    before_ds = len(df)
+    df = df[df.dataset.isin(datasets)].copy()
+    if df.empty:
+        sys.exit(f"ERROR: no rows for model '{args.model}' on datasets "
+                 f"{datasets} in {parquet}.")
+    if len(df) != before_ds:
+        print(f"[dataset filter] {before_ds} → {len(df)} rows "
+              f"(datasets: {','.join(datasets)})")
+
+    if set(datasets) & set(SEALED):
+        print()
+        print("!! REMINDER: dl22 is a SEALED holdout. This distribution "
+              "preflight is BLIND and allowed.")
+        print("!! Do NOT run scripts/validate_model.py (kappa) on dl22 until "
+              "the round-2 correction")
+        print("!! predictions are committed to paper/PREDICTIONS.md.")
+        print()
 
     if args.flagship_pairs:
         frozen = set()
@@ -120,11 +147,11 @@ def main():
         print(f"[flagship filter] {before} → {len(df)} rows ({len(frozen)} frozen pairs)")
 
     # ── Load qrels ────────────────────────────────────────────────────────────
-    datasets_present = set(df.dataset.dropna().unique())
-    qrels = load_qrels(datasets_present)
+    qrels = load_qrels(datasets)
 
     if qrels:
-        df["human"] = [qrels.get((str(q), str(d))) for q, d in zip(df.qid, df.docid)]
+        df["human"] = [qrels.get((str(ds), str(q), str(d)))
+                       for ds, q, d in zip(df.dataset, df.qid, df.docid)]
         df_with_human = df.dropna(subset=["human"])
         qrels_mean = df_with_human["human"].mean()
     else:
@@ -157,6 +184,7 @@ def main():
     print()
     print("=" * 72)
     print(f"PREFLIGHT DISTRIBUTIONS — {args.model}")
+    print(f"Datasets: {','.join(datasets)}")
     print(f"Parquet: {parquet}")
     print(f"Git hash: {git_hash()}")
     print("=" * 72)
@@ -206,6 +234,7 @@ def main():
     print("─" * 72)
     print(f"""
 ### {args.model} — {today} — git hash {hash_}
+- 数据集: {','.join(datasets)}
 - 盲态: blind / non-blind（说明原因）
 - Δ = {delta_str}（模型 L3 均分 {l3_str} − qrels 均分 {qr_str}）
 - D(L1)={d[1]:+.4f}, D(L2)={d[2]:+.4f}, D(L4)={d[4]:+.4f}, D(L5)={d[5]:+.4f}

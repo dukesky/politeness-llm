@@ -13,8 +13,30 @@ from sklearn.metrics import cohen_kappa_score
 # ---------------------------------------------------------------------------
 
 def attach_qrels(df: pd.DataFrame, qrels: dict) -> pd.DataFrame:
+    """Attach the human grade as column ``human`` and drop unmatched rows.
+
+    Accepts both key shapes:
+      * ``(qid, docid)``            — legacy, single-collection (dl19/dl20)
+      * ``(dataset, qid, docid)``   — src/qrels.py, multi-dataset
+
+    The 3-tuple form is REQUIRED whenever more than one collection is in play:
+    msmarco-passage v1, msmarco-passage v2 and ANTIQUE all use bare integer
+    query ids, so a 2-tuple lookup can silently match a dl21 pair against a
+    dl19 grade.
+    """
     df = df.copy()
-    df["human"] = [qrels.get((q, d)) for q, d in zip(df.qid, df.docid)]
+    keyed_by_dataset = bool(qrels) and len(next(iter(qrels))) == 3
+    if keyed_by_dataset:
+        if "dataset" not in df.columns:
+            raise KeyError(
+                "dataset-keyed qrels require a 'dataset' column on df"
+            )
+        df["human"] = [
+            qrels.get((str(ds), str(q), str(d)))
+            for ds, q, d in zip(df.dataset, df.qid, df.docid)
+        ]
+    else:
+        df["human"] = [qrels.get((q, d)) for q, d in zip(df.qid, df.docid)]
     return df.dropna(subset=["human"])
 
 
@@ -46,10 +68,17 @@ def agreement_table(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def flip_rate(df: pd.DataFrame, prompt_a: str, prompt_b: str) -> float:
-    """Share of (qid, docid) pairs whose label changes between two prompts
-    (same model handled by caller via pre-filtering; run 1 only)."""
-    a = df[(df.prompt_id == prompt_a) & (df.run == 1)].set_index(["qid", "docid"]).score
-    b = df[(df.prompt_id == prompt_b) & (df.run == 1)].set_index(["qid", "docid"]).score
+    """Share of pairs whose label changes between two prompts
+    (same model handled by caller via pre-filtering; run 1 only).
+
+    Keyed by (dataset, qid, docid) when a ``dataset`` column is present, so
+    that pooling several collections cannot align a dl21 pair onto an
+    identically-numbered dl19 one.
+    """
+    key = (["dataset", "qid", "docid"] if "dataset" in df.columns
+           else ["qid", "docid"])
+    a = df[(df.prompt_id == prompt_a) & (df.run == 1)].set_index(key).score
+    b = df[(df.prompt_id == prompt_b) & (df.run == 1)].set_index(key).score
     j = pd.concat([a.rename("a"), b.rename("b")], axis=1).dropna()
     return float((j.a != j.b).mean())
 
