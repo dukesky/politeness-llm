@@ -1,14 +1,22 @@
-"""Generate deterministic 40% stratified flagship sample files.
+"""Generate deterministic stratified flagship sample files (40% by default).
 
 Stratification: per-qid, 40% of docids sampled, minimum 1 per qid so no
 query is entirely dropped. seed=42 guarantees identical output on every run.
 
 Usage (run once on Colab, outputs go to inputs/):
+    # round 1, unchanged: dl19 + dl20 under {data_dir}/inputs/
     python scripts/make_flagship_sample.py --data-dir $DATA_DIR
 
-Outputs:
-    {data_dir}/inputs/pairs_dl19_flagship40.jsonl
-    {data_dir}/inputs/pairs_dl20_flagship40.jsonl
+    # round 2: any dataset(s) following the same inputs/pairs_{ds}.jsonl layout
+    python scripts/make_flagship_sample.py --data-dir $DATA_DIR \
+        --datasets dl21,dl22,antique
+
+    # or point at an arbitrary pairs file
+    python scripts/make_flagship_sample.py --pairs-file /path/pairs_x.jsonl \
+        --out /path/pairs_x_flagship40.jsonl
+
+Outputs (default layout):
+    {data_dir}/inputs/pairs_{ds}_flagship40.jsonl
 """
 
 import argparse
@@ -44,17 +52,36 @@ def stratified_sample(pairs: list, ratio: float, seed: int, min_per_qid: int) ->
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data-dir", required=True,
+    ap.add_argument("--data-dir",
                     help="root data directory (contains inputs/ subfolder)")
+    ap.add_argument("--datasets", default=",".join(DATASETS),
+                    help=f"comma-separated dataset names under inputs/ "
+                         f"(default: {','.join(DATASETS)})")
+    ap.add_argument("--pairs-file",
+                    help="explicit pairs jsonl; overrides --data-dir/--datasets")
+    ap.add_argument("--out",
+                    help="output path for --pairs-file (default: <src>_flagship40.jsonl)")
+    ap.add_argument("--ratio", type=float, default=SAMPLE_RATIO)
+    ap.add_argument("--seed", type=int, default=SEED)
     args = ap.parse_args()
 
-    data_dir = Path(args.data_dir)
-    inputs_dir = data_dir / "inputs"
+    if args.pairs_file:
+        src = Path(args.pairs_file)
+        dst = Path(args.out) if args.out else src.with_name(
+            f"{src.stem}_flagship{int(round(args.ratio * 100))}{src.suffix}")
+        jobs = [(src.stem, src, dst)]
+    else:
+        if not args.data_dir:
+            ap.error("one of --data-dir or --pairs-file is required")
+        inputs_dir = Path(args.data_dir) / "inputs"
+        names = [s.strip() for s in args.datasets.split(",") if s.strip()]
+        suffix = f"_flagship{int(round(args.ratio * 100))}"
+        jobs = [(ds,
+                 inputs_dir / f"pairs_{ds}.jsonl",
+                 inputs_dir / f"pairs_{ds}{suffix}.jsonl")
+                for ds in names]
 
-    for ds in DATASETS:
-        src = inputs_dir / f"pairs_{ds}.jsonl"
-        dst = inputs_dir / f"pairs_{ds}_flagship40.jsonl"
-
+    for ds, src, dst in jobs:
         if not src.exists():
             print(f"[SKIP] {src} not found")
             continue
@@ -62,7 +89,7 @@ def main():
         with open(src) as f:
             pairs = [json.loads(line) for line in f if line.strip()]
 
-        sampled = stratified_sample(pairs, SAMPLE_RATIO, SEED, MIN_PER_QID)
+        sampled = stratified_sample(pairs, args.ratio, args.seed, MIN_PER_QID)
 
         # write (idempotent — same seed → same output)
         with open(dst, "w") as f:
@@ -79,7 +106,7 @@ def main():
         print(f"  全量:  {len(pairs):>6} pairs, {len(qids_full):>3} qids")
         print(f"  抽样:  {len(sampled):>6} pairs, {len(qids_sampled):>3} qids"
               f"  (须 == {len(qids_full)})")
-        print(f"  比例:  {len(sampled)/len(pairs):.1%}  (目标 40%)")
+        print(f"  比例:  {len(sampled)/len(pairs):.1%}  (目标 {args.ratio:.0%})")
         print(f"  每 qid passage 数:  "
               f"min={min(per_qid)}  "
               f"median={statistics.median(per_qid):.0f}  "

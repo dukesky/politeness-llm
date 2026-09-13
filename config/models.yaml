@@ -2,6 +2,16 @@
 # Model roster — verified against OpenRouter /api/v1/models on 2026-06-10.
 # Prices are USD per million tokens (pricing.prompt/completion × 1e6).
 # provider_order pins backend; allow_fallbacks=False is set in collect.py.
+#
+# `round`: which collection round an entry belongs to. Entries WITHOUT a
+# `round` key are round 1 (absence == 1) — do not retro-tag them. Round-2
+# entries carry `round: 2` and were verified on OpenRouter 2026-09-12.
+# Round 2 reuses two round-1 entries unchanged as cross-round anchors:
+#   deepseek/deepseek-v4-flash and google/gemini-3.5-flash
+# (same model_id, same params → their round-1 data is directly comparable;
+# do not edit those two entries).
+# collect.py ignores unknown keys, so `round` is metadata only; select a
+# round-2 model with e.g. --models v4.1-flash,gemini-3.8-flash
 # =============================================================================
 
 defaults:
@@ -86,3 +96,57 @@ models:
     n_runs: 1
     reasoning_mode: "mandatory"            # API forces reasoning; reasoning_tokens > 0 expected
     max_tokens: 4000                       # reasoning eats into max_tokens; raise to prevent truncation
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # ROUND 2 — verified against OpenRouter /api/v1/models on 2026-09-12.
+  # Anchors reused from round 1 as-is: deepseek/deepseek-v4-flash,
+  # google/gemini-3.5-flash (see header note).
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # ── round 2, cheap tier ──────────────────────────────────────────────────
+
+  - model_id: deepseek/deepseek-v4.1-flash
+    tier: cheap
+    family: deepseek
+    round: 2
+    # ⚠️ provider_order copied from the v4-flash (round-1) entry. DeepSeek's
+    # official endpoint is filtered out by this account's privacy settings, so
+    # WandB is the visible serving provider — but availability for *this* model
+    # has NOT been confirmed. Re-verify with scripts/check_providers.py before
+    # starting collection and update this list if WandB does not serve it.
+    provider_order: ["WandB"]
+    price_per_m_input: 0.15
+    price_per_m_output: 0.60
+    reasoning_mode: "disabled"             # sends reasoning.enabled=false to suppress native CoT
+
+  - model_id: google/gemini-3.8-flash
+    tier: cheap
+    family: google
+    round: 2
+    provider_order: ["Google"]             # Google AI Studio — closed-source, full precision
+    price_per_m_input: 0.75                # pricing.prompt      7.5e-7 × 1e6
+    price_per_m_output: 3.75               # pricing.completion  3.75e-6 × 1e6
+
+  # ── round 2, flagship tier (20 % subsample, 1 run) ───────────────────────
+
+  - model_id: anthropic/claude-opus-5
+    tier: flagship
+    family: anthropic
+    round: 2
+    provider_order: ["Anthropic"]          # Anthropic official — closed-source, full precision
+    price_per_m_input: 5.00
+    price_per_m_output: 25.00
+    subsample: 0.2
+    n_runs: 1
+    reasoning_mode: "disabled"            # zero reasoning_tokens, as for claude-opus-4.8
+
+  - model_id: openai/gpt-5.6-sol
+    tier: flagship
+    family: openai
+    round: 2
+    provider_order: ["OpenAI"]             # OpenAI official — closed-source, full precision
+    price_per_m_input: 2.00
+    price_per_m_output: 10.00
+    subsample: 0.2
+    n_runs: 1
+    reasoning_effort: "none"              # GPT-5.1+ supports reasoning suppression
