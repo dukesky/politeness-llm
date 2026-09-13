@@ -120,8 +120,6 @@ models:
     provider_order: ["SiliconFlow"]
     price_per_m_input: 0.30
     price_per_m_output: 1.20
-    price_per_m_input: 0.15
-    price_per_m_output: 0.60
     reasoning_mode: "disabled"             # sends reasoning.enabled=false to suppress native CoT
 
   - model_id: google/gemini-3.8-flash
