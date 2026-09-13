@@ -113,11 +113,13 @@ models:
     tier: cheap
     family: deepseek
     round: 2
-    # WandB does not serve v4.1-flash (check_providers FAIL 2026-09-12).
-    # Pinned to DeepSeek first-party (uptime 99.997%), matching the other
-    # families' first-party pins. If the account's privacy settings filter the
-    # DeepSeek endpoint at request time, fall back to SiliconFlow (fp8, 100%).
-    provider_order: ["DeepSeek"]
+    # WandB does not serve v4.1-flash; DeepSeek first-party returns HTTP 404
+    # for this account (privacy-settings filtering, live-verified 2026-09-12).
+    # Pinned to SiliconFlow: fp8 (matches the v4-flash anchor's precision),
+    # uptime 100%.
+    provider_order: ["SiliconFlow"]
+    price_per_m_input: 0.30
+    price_per_m_output: 1.20
     price_per_m_input: 0.15
     price_per_m_output: 0.60
     reasoning_mode: "disabled"             # sends reasoning.enabled=false to suppress native CoT
@@ -129,9 +131,24 @@ models:
     provider_order: ["Google"]             # Google AI Studio — closed-source, full precision
     price_per_m_input: 0.75                # pricing.prompt      7.5e-7 × 1e6
     price_per_m_output: 3.75               # pricing.completion  3.75e-6 × 1e6
-    reasoning_mode: "disabled"             # audit 2026-09-12 showed 161 rsn_tok by
-                                           # default; re-audit must show rsn_tok=0,
-                                           # else reclassify as reasoning-native
+    # REASONING-NATIVE: API rejects reasoning.enabled=false ("Reasoning is
+    # mandatory for this endpoint", live-verified 2026-09-12). Classified like
+    # gemini-3.1-pro-preview: analyzed separately from non-reasoning judges;
+    # together they give 2 reasoning judges for the tone x reasoning line.
+    reasoning_mode: "mandatory"
+    max_tokens: 4000                       # reasoning eats into max_tokens; prevent truncation
+
+  - model_id: google/gemini-3.7-flash
+    tier: cheap
+    family: google
+    round: 2
+    # CANDIDATE cleaner generational pair for the gemini-3.5-flash anchor IF
+    # reasoning can be disabled (3.8-flash cannot). Keep whichever of 3.7/3.8
+    # fits the design; audit decides. Pricing tier 0.75/3.75 (standard).
+    provider_order: ["Google"]
+    price_per_m_input: 0.75
+    price_per_m_output: 3.75
+    reasoning_mode: "disabled"
 
   # ── round 2, flagship tier (20 % subsample, 1 run) ───────────────────────
 
