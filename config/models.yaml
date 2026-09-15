@@ -105,6 +105,9 @@ models:
   # ROUND 2 — verified against OpenRouter /api/v1/models on 2026-09-12.
   # Anchors reused from round 1 as-is: deepseek/deepseek-v4-flash,
   # google/gemini-3.5-flash (see header note).
+  # NOTE: the `subsample: 0.2` fields below are STALE INFORMATIONAL METADATA —
+  # frozen practice is 40% (scripts/make_flagship_sample.py default, matching
+  # the audited pairs_*_flagship40.jsonl counts). Values left untouched.
   # ═══════════════════════════════════════════════════════════════════════
 
   # ── round 2, cheap tier ──────────────────────────────────────────────────
