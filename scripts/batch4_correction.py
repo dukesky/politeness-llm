@@ -640,28 +640,38 @@ def fit_monotone_map(P: Packed, idx: np.ndarray, level: int):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def sample_calibration_idx(P: Packed, n_pairs: int, rng) -> np.ndarray:
-    """Query-clustered calibration subsample of ``n_pairs`` labeled pairs.
+    """Query-clustered calibration subsample of ``n_pairs`` DISTINCT pairs.
 
-    Whole queries are drawn WITH REPLACEMENT (a calibration set is collected
-    query by query, and pairs inside a query are not independent), then the
-    pair list is truncated to exactly n so every size is comparable.
+    Queries are drawn at random (a calibration set is collected query by
+    query, and pairs inside a query are not independent), but a pair already
+    in the set is never counted twice: ``n`` means n distinct labeled pairs —
+    n items a human actually had to grade — so the x-axis of C1 is the real
+    annotation budget. Extra queries are drawn until n distinct pairs are
+    reached, and the last query is truncated so every size is exact.
     """
-    picked: list = []
-    total = 0
-    guard = 0
-    while total < n_pairs:
-        qi = int(rng.integers(0, P.n_queries))
-        ps = P.query_pairs[qi]
-        if ps.size == 0:
-            guard += 1
-            if guard > 1000:
-                sys.exit(f"ERROR: '{P.model}' @ {P.scope}: could not assemble a "
-                         f"calibration set — every sampled query is empty.")
-            continue
-        picked.append(ps)
-        total += ps.size
-    pairs = np.concatenate(picked)[:n_pairs]
-    return np.concatenate([P.pair_rows[p] for p in pairs])
+    if n_pairs > P.n_pairs:
+        sys.exit(f"ERROR: '{P.model}' @ {P.scope}: asked for {n_pairs} distinct "
+                 f"calibration pairs but the scope only has {P.n_pairs}.")
+    chosen: list = []
+    seen: set = set()
+    attempts = 0
+    max_attempts = 200 * P.n_queries + 1000
+    while len(chosen) < n_pairs:
+        attempts += 1
+        if attempts > max_attempts:
+            sys.exit(f"ERROR: '{P.model}' @ {P.scope}: could not assemble "
+                     f"{n_pairs} distinct calibration pairs in {attempts} "
+                     f"query draws ({P.n_pairs} pairs over {P.n_queries} "
+                     f"queries) — the pair/query structure is degenerate.")
+        for p in P.query_pairs[int(rng.integers(0, P.n_queries))]:
+            p = int(p)
+            if p in seen:
+                continue
+            seen.add(p)
+            chosen.append(p)
+            if len(chosen) >= n_pairs:
+                break
+    return np.concatenate([P.pair_rows[p] for p in chosen])
 
 
 def run_c1(packs: dict, B: int, sizes, seed: int, tex_dir: Path) -> dict:
@@ -695,8 +705,8 @@ def run_c1(packs: dict, B: int, sizes, seed: int, tex_dir: Path) -> dict:
               f"{'E[regret]':>10} {'n_ok':>6}")
         for n in sizes:
             if n > P.n_pairs:
-                print(f"    {n:>6}   skipped — only {P.n_pairs} labeled pairs "
-                      f"in this scope")
+                print(f"    {n:>6}   WARNING: skipped — this scope has only "
+                      f"{P.n_pairs} distinct labeled pairs, fewer than n")
                 continue
             rng = np.random.default_rng(seed + 1000 * n)
             errs, hits, regrets, bad = [], 0, [], 0
