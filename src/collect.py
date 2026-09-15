@@ -265,6 +265,9 @@ async def main():
                     help="limit to 5 pairs x 2 prompts x 1 model x 1 run")
     ap.add_argument("--models", default=None,
                     help="comma-separated model_id substrings; omit to run all")
+    ap.add_argument("--prompts", default=None,
+                    help="comma-separated prompt_id substrings (e.g. 'L3,L1'); "
+                         "omit to run all variants")
     args = ap.parse_args()
 
     prompts = load_yaml("config/prompts.yaml")
@@ -279,10 +282,22 @@ async def main():
         filters = [s.strip() for s in args.models.split(",") if s.strip()]
         models = [m for m in models if any(f in m["model_id"] for f in filters)]
 
+    if args.prompts:
+        pfilters = [s.strip() for s in args.prompts.split(",") if s.strip()]
+        variants = [v for v in variants
+                    if any(f in v["prompt_id"] for f in pfilters)]
+        if not variants:
+            raise SystemExit(
+                f"ERROR: --prompts {args.prompts!r} matched no variant. "
+                f"Known: {[v['prompt_id'] for v in prompts['variants']]}"
+            )
+
     if args.dry_run:
         pairs, variants, models = pairs[:5], variants[:2], models[:1]
 
     print(f"Selected models ({len(models)}): {[m['model_id'] for m in models]}")
+    print(f"Selected variants ({len(variants)}): "
+          f"{[v['prompt_id'] for v in variants]}")
 
     raw_dir = Path(args.data_dir) / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
