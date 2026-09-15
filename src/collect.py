@@ -296,8 +296,9 @@ async def main():
         pairs, variants, models = pairs[:5], variants[:2], models[:1]
 
     print(f"Selected models ({len(models)}): {[m['model_id'] for m in models]}")
-    print(f"Selected variants ({len(variants)}): "
-          f"{[v['prompt_id'] for v in variants]}")
+    if args.prompts:   # only when filtering: default stdout stays byte-identical
+        print(f"Selected variants ({len(variants)}): "
+              f"{[v['prompt_id'] for v in variants]}")
 
     raw_dir = Path(args.data_dir) / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)

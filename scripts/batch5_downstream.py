@@ -48,7 +48,9 @@ judged queries.  dl21 is NOT sealed.  **dl22 is hard-excluded** here
 Subcommands
 -----------
     fetch-runs   acquire / register the system pool  (TREC runs or pyserini)
-    coverage     how much of the pool's top-10 is judged, and by whom
+    coverage     how much of the pool's top-10 carries a usable label, per
+                 judge, at the levels `evaluate` actually consumes (L3 for RAW
+                 plus that judge's frozen dial level for CORR)
     evaluate     the analysis: NDCG@10 -> system ranking -> Kendall tau
 
 Typical Colab sequence
@@ -378,6 +380,31 @@ def judge_labels(d: pd.DataFrame, level: int, mono=None) -> dict:
     return {k: round_half_up(float(np.mean(v))) for k, v in acc.items()}
 
 
+def covered_pairs(d: pd.DataFrame, level: int) -> set:
+    """Pairs this judge has a USABLE label for at ``level``.
+
+    Deliberately the SAME predicate as :func:`judge_labels` — politeness level,
+    ``parse_ok``, non-null score.  A pair that was collected but whose records
+    all failed to parse yields no label, so counting it as "covered" would
+    overstate coverage and silently under-count the top-up; the two functions
+    must not drift apart.
+    """
+    ok = d[(d.politeness_level == level) & d.parse_ok & d.score.notna()]
+    if ok.empty:
+        return set()
+    return set(zip(ok.qid.astype(str), ok.docid.astype(str)))
+
+
+def needed_levels(rule: dict) -> list[int]:
+    """The politeness levels a judge must have labels at to be evaluable.
+
+    ``evaluate`` builds RAW from L3 and CORR from the frozen rule's dial level,
+    so a pair is only usable for that judge if BOTH exist.  When the dial is L3
+    the two coincide and only one level is needed.
+    """
+    return sorted({3, int(rule["dial_level"])})
+
+
 def human_labels(qrels: dict) -> dict:
     """dl21 rows of a src.qrels-style dict -> {(qid, docid): grade}."""
     out = {}
@@ -404,16 +431,30 @@ def dcg(grades) -> float:
 def ndcg_at_k(ranked_docids, labels_q: dict, k: int = TOP_K) -> float:
     """NDCG@k of ONE query under ONE label set, on a CONDENSED list.
 
-    ``ranked_docids`` is the run's ranking for the query; documents the label
-    set does not judge are removed first (condensed-list evaluation, Sakai's
-    ``condensed lists``), then the top-k of what remains is scored.
+    The convention implemented here, stated exactly (it is one of several
+    defensible ones, so it is spelled out rather than named):
 
-    The ideal DCG is taken over ALL documents the label set judges for this
-    query (its full judged pool), not only over the retrieved ones — that is
-    trec_eval's ``ndcg_cut`` convention and it is what keeps NDCG comparable
-    across systems that retrieve different subsets.  A query whose judged pool
-    is all-zero has IDCG == 0 and scores 0.0 for every system, so it
-    contributes nothing to the between-system comparison.
+      1. CONDENSE: drop from the run's ranking every document the label set
+         does not judge.
+      2. RE-RANK: the surviving documents keep their relative order and are
+         assigned fresh ranks 1..n — so a removed document does NOT leave a
+         gap that costs the documents below it discount.
+      3. CUT: score the first ``k`` of those, gain ``2^rel - 1``, discount
+         ``log2(rank + 1)``.
+      4. IDCG: the top ``k`` grades of the label set's FULL judged pool for
+         this query, sorted descending — including judged documents this run
+         did not retrieve.  That keeps the denominator a property of the query
+         and the label set rather than of the system, so systems that retrieve
+         different subsets stay comparable.
+
+    A query whose judged pool is all-zero has IDCG == 0 and scores 0.0 for
+    every system, so it contributes nothing to the between-system comparison.
+
+    This is NOT claimed to reproduce trec_eval's ``ndcg_cut`` (which does not
+    condense).  What matters for this analysis is that the SAME convention is
+    applied uniformly to all three label sets and all systems, so the
+    RAW-vs-CORR comparison is internally consistent; absolute NDCG values are
+    not comparable to published trec_eval numbers.
     """
     condensed = [d for d in ranked_docids if d in labels_q][:k]
     ideal = sorted(labels_q.values(), reverse=True)[:k]
@@ -771,32 +812,60 @@ def cmd_coverage(args) -> None:
     human = human_labels(qrels)
     judged_qids = {q for q, _ in human}
 
-    models = parse_models(args.models)
-    known = sorted(df.model_id.unique())
-    if models:
-        missing = [m for m in models if m not in known]
-        if missing:
-            sys.exit(f"ERROR: --models not in the parquet: {missing}\n"
-                     f"  known: {known}")
+    rules_path = Path(args.rules) if args.rules else \
+        data_dir / "derived" / "correction_rules.json"
+    if not rules_path.exists():
+        sys.exit(f"ERROR: correction rules not found at {rules_path}.\n"
+                 f"  Coverage is defined against the levels `evaluate` will "
+                 f"actually use (L3 plus each\n"
+                 f"  judge's frozen dial level), so the rules are required "
+                 f"here too. Run\n"
+                 f"  scripts/batch4_correction.py (rules stage) first.")
+    rules_all = json.loads(rules_path.read_text())
 
-    # LLM-judged pairs, overall and per model (any politeness level counts as
-    # "collected"; the dial level a rule needs is checked in `evaluate`).
-    llm_by_model = {
-        m: set(zip(g.qid.astype(str), g.docid.astype(str)))
-        for m, g in df.groupby("model_id")
-    }
-    required = models or list(llm_by_model)
-    llm_required = set.intersection(*[llm_by_model[m] for m in required]) \
-        if required else set()
-    llm_any = set().union(*llm_by_model.values()) if llm_by_model else set()
+    known = sorted(df.model_id.unique())
+    models = parse_models(args.models) or known
+    missing = [m for m in models if m not in known]
+    if missing:
+        sys.exit(f"ERROR: --models not in the parquet: {missing}\n"
+                 f"  known: {known}")
+
+    # A pair counts as covered for a judge only if that judge has a USABLE
+    # label (parse_ok, non-null score) at EVERY level `evaluate` needs: L3 for
+    # RAW and the frozen dial level for CORR. This is the same predicate
+    # judge_labels() applies, so coverage cannot overstate what is evaluable.
+    judges: dict[str, dict] = {}
+    for m in models:
+        rule = (rules_all.get("rules", {}).get(m, {}) or {}).get("msmarco")
+        if rule is None:
+            sys.exit(f"ERROR: no frozen msmarco rule for '{m}' in "
+                     f"{rules_path}.\n"
+                     f"  Without it the dial level is unknown and coverage "
+                     f"cannot be defined for this judge.")
+        lv = needed_levels(rule)
+        d = df[df.model_id == m]
+        by_lvl = {level: covered_pairs(d, level) for level in lv}
+        judges[m] = {
+            "dial": int(rule["dial_level"]),
+            "needed": lv,
+            "by_lvl": by_lvl,
+            "covered": set.intersection(*by_lvl.values()),
+        }
+
+    llm_required = set.intersection(*[j["covered"] for j in judges.values()])
+    llm_any = set().union(*[j["covered"] for j in judges.values()])
 
     print("=" * 78)
     print(f"  BATCH 5 COVERAGE — {DATASET} top-{TOP_K}, {len(runs)} systems")
     print("=" * 78)
     print(f"  judged queries in qrels : {len(judged_qids)} "
           f"(expected {N_QUERIES_EXPECTED})")
-    print(f"  'LLM-judged' means judged by ALL of: "
-          f"{required if models else '(any model)'}")
+    print(f"  rules: {rules_path}  (git {rules_all.get('git_hash')})")
+    print(f"  'LLM-judged' = a usable (parse_ok) label at EVERY needed level "
+          f"for ALL of:")
+    for m in models:
+        print(f"      {m}  (dial=L{judges[m]['dial']}, needs "
+              f"{'+'.join('L%d' % x for x in judges[m]['needed'])})")
     print()
     print(f"  {'run':<30} {'pairs':>7} {'human%':>8} {'llm%':>8} {'both%':>8}")
 
@@ -829,7 +898,7 @@ def cmd_coverage(args) -> None:
     print(f"  UNION over all runs      : {n} distinct (qid, docid)")
     print(f"    human-judged           : {len(h_set)} ({100*len(h_set)/n:.1f}%)")
     print(f"    LLM-judged (required)  : {len(l_set)} ({100*len(l_set)/n:.1f}%)")
-    print(f"    LLM-judged (any model) : {len(union & llm_any)}")
+    print(f"    LLM-judged (ANY judge) : {len(union & llm_any)}")
     print(f"    both                   : {len(h_set & l_set)}")
     print(f"    human only -> TOP-UP   : {len(topup)}  "
           f"(collectable: the human grade exists, so a new LLM label joins "
@@ -838,13 +907,26 @@ def cmd_coverage(args) -> None:
           f"(NOT collectable — no human grade; stays condensed out of ALL "
           f"label sets, for every judge, so it cannot bias the comparison)")
 
-    if args.per_model:
-        print()
-        print(f"  {'model':<34} {'of union':>10} {'of human':>10}")
-        for m in known:
-            s = union & llm_by_model[m]
-            print(f"  {m[:34]:<34} {100*len(s)/n:>9.1f}% "
-                  f"{100*len(s & h_set)/max(1, len(h_set)):>9.1f}%")
+    # ---- per-judge, per-needed-level coverage -----------------------------
+    print()
+    print("  PER-JUDGE COVERAGE of the union (needed levels are what "
+          "`evaluate` consumes)")
+    print(f"  {'judge':<30} {'level':>6} {'of union':>10} {'of human':>10} "
+          f"{'missing':>9}")
+    for m in models:
+        j = judges[m]
+        for level in j["needed"]:
+            s = union & j["by_lvl"][level]
+            tag = f"L{level}" + ("*" if level == j["dial"] else "")
+            print(f"  {m[:30]:<30} {tag:>6} {100*len(s)/n:>9.1f}% "
+                  f"{100*len(s & h_set)/max(1, len(h_set)):>9.1f}% "
+                  f"{len(h_set - s):>9}")
+        c = union & j["covered"]
+        print(f"  {'':<30} {'ALL':>6} {100*len(c)/n:>9.1f}% "
+              f"{100*len(c & h_set)/max(1, len(h_set)):>9.1f}% "
+              f"{len(h_set - c):>9}")
+    print("  (* = this judge's frozen dial level; 'missing' counts "
+          "human-judged pairs lacking a usable label)")
 
     # ---- write the top-up pairs file (same schema as src/build_pairs.py) ---
     out_path = data_dir / "inputs" / f"pairs_{DATASET}_runs_topup.jsonl"
@@ -886,24 +968,39 @@ def cmd_coverage(args) -> None:
         print(f"\n  wrote {written} top-up pairs -> {out_path}")
 
     # ---- cost estimate ----------------------------------------------------
-    n_pairs = len(topup)
+    # Exact per-judge accounting: each judge only needs the levels IT is
+    # missing, at 3 paraphrases per level. Summing per judge (rather than
+    # costing the whole top-up list at the whole grid) avoids charging every
+    # judge for labels it already has.
     print()
-    print(f"  COST ESTIMATE for {n_pairs} top-up pairs "
-          f"(~{TOK_IN} in + {TOK_OUT} out tokens per call, {args.runs} run(s))")
-    print(f"  {'scenario':<26} {'calls':>9} " +
+    print(f"  COST ESTIMATE (~{TOK_IN} in + {TOK_OUT} out tokens/call, "
+          f"3 paraphrases/level, {args.runs} run(s))")
+    print(f"  {'judge':<30} {'pairs':>7} {'levels':>7} {'calls':>9} " +
           " ".join(f"{k:>12}" for k in PRICES))
-    for label, n_variants in (("L3 only (3 variants)", 3),
-                              ("L3 + dial (6)", 6),
-                              ("full grid (15)", 15)):
-        calls = n_pairs * n_variants * args.runs
-        cells = []
-        for _k, (pin, pout) in PRICES.items():
-            usd = calls * (TOK_IN * pin + TOK_OUT * pout) / 1e6
-            cells.append(f"${usd:>11.2f}")
-        print(f"  {label:<26} {calls:>9} " + " ".join(cells))
-    print("  (a judge only needs its OWN dial level + L3; 'full grid' is the "
-          "ceiling if the\n   coordinator wants the top-up to support every "
-          "tone level.)")
+    total_calls = 0
+    for m in models:
+        j = judges[m]
+        calls = 0
+        pairs_touched = set()
+        for level in j["needed"]:
+            miss = h_set - j["by_lvl"][level]
+            pairs_touched |= miss
+            calls += len(miss) * 3 * args.runs
+        total_calls += calls
+        cells = [f"${calls * (TOK_IN * pin + TOK_OUT * pout) / 1e6:>11.2f}"
+                 for pin, pout in PRICES.values()]
+        print(f"  {m[:30]:<30} {len(pairs_touched):>7} "
+              f"{'+'.join('L%d' % x for x in j['needed']):>7} {calls:>9} "
+              + " ".join(cells))
+    cells = [f"${total_calls * (TOK_IN * pin + TOK_OUT * pout) / 1e6:>11.2f}"
+             for pin, pout in PRICES.values()]
+    print(f"  {'TOTAL':<30} {len(topup):>7} {'':>7} {total_calls:>9} "
+          + " ".join(cells))
+    print("  Columns price the SAME call volume at each tier — read the column "
+          "matching each\n  judge, not the row total, unless every judge is on "
+          "that tier.")
+    print(f"  Full 15-variant grid on all {len(topup)} top-up pairs would be "
+          f"{len(topup) * 15 * args.runs} calls (ceiling).")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -971,12 +1068,28 @@ def cmd_evaluate(args) -> None:
               f"{r['delta_tau']:>+8.4f} {r['boot']['p_gt0']:>8.3f} "
               f"{r['r_raw']:>+8.4f} {r['r_corr']:>+8.4f}")
     noop = [r for r in ok if r["no_op_expected"]]
+    bad = [r for r in noop if abs(r["delta_tau"]) > 1e-12]
     if noop:
-        bad = [r["model"] for r in noop if abs(r["delta_tau"]) > 1e-12]
         print(f"\n  no-op control: {len(noop)} judge(s) have a strictly-"
               f"increasing map at L3;")
         print(f"    delta_tau must be exactly 0 for them — "
-              f"{'OK' if not bad else 'VIOLATED by ' + ', '.join(bad)}")
+              f"{'OK' if not bad else 'VIOLATED'}")
+    if bad:
+        # A strictly-increasing map at L3 CANNOT change any NDCG, so a non-zero
+        # delta_tau is proof of a bug in the pipeline, not a finding. Fail hard
+        # and write no LaTeX — a violated invariant must never reach the paper.
+        sys.exit(
+            "\nERROR: no-op invariant VIOLATED — the correction moved the "
+            "system ranking for\n"
+            + "".join(f"    {r['model']}: dial=L{r['dial_level']} "
+                      f"map={r['monotone_map']} delta_tau={r['delta_tau']!r}\n"
+                      for r in bad)
+            + "  NDCG@10 is invariant under a strictly-increasing relabelling "
+              "of the grade scale,\n"
+              "  so delta_tau must be exactly 0 for these judges. This is a "
+              "BUG in label\n"
+              "  construction or NDCG, not a result. No .tex was written."
+        )
 
     # ---- LaTeX ------------------------------------------------------------
     tex_dir = data_dir / "derived" / "tex"
@@ -1192,10 +1305,13 @@ def main() -> None:
     p = sub.add_parser("coverage", help="judged-fraction of the pool's top-10")
     p.add_argument("--data-dir", default=None, **common)
     p.add_argument("--models", default=None,
-                   help="comma-separated model_ids that must ALL have judged a "
-                        "pair for it to count as LLM-judged (default: any)")
-    p.add_argument("--per-model", action="store_true",
-                   help="also print a per-model coverage breakdown")
+                   help="comma-separated judge model_ids; a pair counts as "
+                        "LLM-judged only if ALL of them have a usable label at "
+                        "every level they need (default: all judges)")
+    p.add_argument("--rules", default=None,
+                   help="correction_rules.json (default: "
+                        "$DATA_DIR/derived/correction_rules.json); needed to "
+                        "know each judge's dial level")
     p.add_argument("--runs", type=int, default=1,
                    help="runs per (pair, variant) for the cost estimate")
     p.add_argument("--no-write", action="store_true",
