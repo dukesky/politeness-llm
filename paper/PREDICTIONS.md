@@ -637,3 +637,43 @@ po 的收益。结论（进论文）：**输出侧重映射的 κ 收益依赖�
 衔接：目标域几十个标注 pair 即可重拟合 map（廉价的域内校准），预注册的
 跨域迁移失败恰好论证了这一步不可省略。dial-only（输入侧）在强漂移
 judge（v4-flash）上跨域方向正确，量程一如既往受限。
+
+# B5 预注册 — 下游系统排名效用（batch5，dl21，非封存数据）
+
+登记时间：2026-09-16。分析代码 git hash：bce191a（scripts/batch5_downstream.py）。
+分析：evaluate 子命令 — NDCG@10（gain 2^rel−1，condensed intersection
+universe，四步约定显式声明、不冒充 trec_eval）→ 系统排名 → 对 HUMAN 排名的
+Kendall τ-b；paired query bootstrap B=2000 seed 42。
+
+Judges（cheap 全网格；flagship 两模型仅 40% 子样本、覆盖不足，不入 batch5）：
+- deepseek-v4-flash、deepseek-v4.1-flash、gemini-3.5-flash：C4-b 冻结规则
+  均为 dial=L1、map=[0,0,2,3]（msmarco 家族，git 446927c）
+- gemini-3.8-flash：identity@L3 → 结构性 no-op 对照
+
+系统池：pyserini 自建 13 系统（bm25 参数网格 8 + RM3 2 + doc2query-T5 3；
+bm25-rocchio 与 d2q-bm25-rm3 因预建索引无 document vectors 被跳过；TREC
+官方 63 runs 因 401 login-wall 不可得，升级路径见内部 roadmap）。
+覆盖率（pool top-10 并集，登记时数字）：1408 distinct (qid,docid)；
+human-judged 1165（82.7%）；四 judge 所需档位全可用 840（59.7%）；
+top-up 325 对（L1+L3 × 3 judges + L3 × 3.8-flash，13,650 calls，≈$3.2）
+已于登记同时启动采集；243 对无人类标注，condensed 评测自动排除。
+
+盲态声明：登记前未计算或查看过任何 τ(RAW/CORR vs HUMAN)、NDCG 或
+system-ranking 数值；coverage 输出只含标签可用性计数，无一致性指标。
+
+预测（主终点，逐条可判）：
+1. τ_raw ≥ +0.3（全部 4 judge）：工作点失准主要是阈值伪影，对系统间排序
+   破坏有限（v1 R2 文档级排序 τ 0.74–0.94 的下游延伸）。注意池内 bm25
+   变体同质性高、τ 方差大，故只押保守下界。
+2. 3 个施加校正的 judge：Δτ = τ_corr − τ_raw ≥ 0（方向），|Δτ| ≤ 0.10
+   （幅度）。机制：收益只能来自 grade collapse（map [0,0,2,3] 将 1 压到 0，
+   消解 judge 对边缘文档的宽松部分分）与 dial 换档（L1 为不同标签集）；
+   monotone map 不能重排单查询内文档。
+3. gemini-3.8-flash：Δτ ≡ 0.0000（identity@L3 的结构性不变量，代码以
+   hard-fail 断言强制）——作为 pipeline correctness check 报告，非 null 结果。
+4. 判定纪律：若任一施加校正的 judge Δτ < 0 且 bootstrap 90% CI 不含 0，
+   记为"校正伤害下游排序"，如实报告并进论文（与 C4 κ 不迁移同等地位）。
+
+开箱结果（evaluate 后回填）：
+- τ_raw / τ_corr / Δτ 及 CI（逐 judge）：
+- 命中/未中：
