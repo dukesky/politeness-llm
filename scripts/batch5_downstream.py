@@ -570,6 +570,10 @@ def paired_bootstrap(nd: np.ndarray, b: int = 2000, seed: int = 42) -> dict:
         "n_ok": int(d.size),
         "mean": float(d.mean()),
         "ci": (float(np.percentile(d, 2.5)), float(np.percentile(d, 97.5))),
+        # 90% CI (5th/95th pct): the B5 pre-registration's harm-verdict clause
+        # is stated on the 90% CI, so it must be computed, not proxied by the
+        # wider 95% interval (which would bias toward "no harm").
+        "ci90": (float(np.percentile(d, 5.0)), float(np.percentile(d, 95.0))),
         "p_gt0": float((d > 0).mean()),
         "tau_raw_ci": (float(np.percentile(raws, 2.5)),
                        float(np.percentile(raws, 97.5))),
@@ -694,6 +698,10 @@ def print_judge_section(res: dict) -> None:
     print(f"  delta_tau           = {res['delta_tau']:+.4f}   "
           f"95% CI [{b['ci'][0]:+.4f}, {b['ci'][1]:+.4f}]   "
           f"P(delta>0) = {b['p_gt0']:.3f}   (B={b['n_ok']})")
+    ci90 = b.get("ci90", (np.nan, np.nan))
+    print(f"  delta_tau (exact)   = {res['delta_tau']!r}   "
+          f"90% CI [{ci90[0]:+.4f}, {ci90[1]:+.4f}]  <- pre-registered "
+          f"harm-verdict interval")
     print(f"  Pearson r (secondary): RAW {res['r_raw']:+.4f}  "
           f"CORR {res['r_corr']:+.4f}")
 
