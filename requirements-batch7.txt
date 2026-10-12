@@ -1,0 +1,7 @@
+# Batch 7 (experiment B, distillation) — GPU training/scoring deps only.
+# Install alongside the base requirements:
+#   pip install -r requirements.txt -r requirements-batch7.txt
+# Colab ships a CUDA torch already; the lower bound avoids a reinstall there.
+torch>=2.6
+transformers>=4.40
+# sentence-transformers is NOT needed (plain transformers loop).
