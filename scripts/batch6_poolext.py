@@ -115,6 +115,27 @@ bootstrap and sub-sampling replicates are matrix products.
       mean, median, fraction < -0.05; ">=80% of the q=32 gain by q=8" stated
       only if the q=32 mean gain > TIE_F1.
 
+Follow-up 2 (``followup2``; EXPLORATORY — not pre-registered)
+-------------------------------------------------------------
+The evaluator's re-run requests on ``followup`` (which is left unchanged and
+re-used, via followup_cell(), for every shared section; same dl22 gate plus
+the B6 registration heading):
+  (R) RETHRESH baseline: query-disjoint 2-fold cross-fit (same folds / fold
+      seed as REFIT) of ONE threshold t on the L3 vote sum, t chosen by train
+      binary kappa [RETHRESH_K] or train F1@2 [RETHRESH_F1] (ties -> RAW t,
+      then lower t); held-out F1/P/R/ratio@2 and dF1@2 REFIT-RETHRESH_K,
+      F1REFIT-RETHRESH_F1, FROZEN-RETHRESH_{K,F1} with eval-only and
+      fit-aware (nested; every fitted arm re-fitted per replicate) CIs.
+  (B2) curve verdicts for every arm incl. FROZEN:DIAL / FROZEN:MAP; the grid
+      "ceiling" is reported as an optimistic in-sample reference (NOT an
+      upper bound) beside the in-sample best L3 re-threshold, with flags.
+  (S) fold-seed robustness (--fold-seeds, default 42 only): REFIT 2x2
+      attribution, curve verdicts and C/R paired dF1@2 point estimates per
+      seed, with sign flips vs the primary seed.
+  (E) E6' plus the RAW-fallback rate; q/n_queries finite-population flags.
+  Header: multiplicity / non-independence, in-sample status, flagship
+  subsample, replicates per nested-bootstrap tail (warning if < 50).
+
 Subcommands
 -----------
     paste     --datasets dl22,dl21,antique
@@ -123,6 +144,9 @@ Subcommands
     run       --datasets dl22 --unseal-dl22
     followup  --datasets dl22,dl21,antique --unseal-dl22 [--judges ...]
               [--b 1000] [--nested-b 200] [--seed 42] [--e6p-b 1000]
+    followup2 --datasets dl22,dl21,antique --unseal-dl22 [--judges ...]
+              [--fold-seeds 42[,43,44,45,46]] [--nested-b 200|1000] [--b 1000]
+              [--e6p-b 1000] [--q-sizes 2,4,8,16,32]
     selftest  [--keep-dir DIR]
 
 Outputs (under DATA_DIR — this repo carries no data artefacts):
@@ -135,6 +159,10 @@ Outputs (under DATA_DIR — this repo carries no data artefacts):
     $DATA_DIR/derived/batch6_opcurve_<ds>_<judge_slug>.csv
     $DATA_DIR/derived/tex/batch6_followup_<ds>_{factorial,attrib,opcurve,
                                                f1refit,e6p}.tex
+  followup2:
+    $DATA_DIR/derived/batch6_followup2_<ds>.json
+    $DATA_DIR/derived/tex/batch6_followup2_<ds>_{rethresh,opcurve,seeds,
+                                                e6p}.tex
 """
 
 from __future__ import annotations
@@ -2352,24 +2380,28 @@ def opcurve(fc: dict, cell: dict, marks: dict, fold_marks: dict):
     return rows, summary, versus
 
 
-def nested_bootstrap(fc: dict, B: int, seed: int) -> dict:
+def nested_bootstrap(fc: dict, B: int, seed: int,
+                     return_reps: bool = False) -> dict:
     """Fit-aware CI: resample queries, redo the 2-fold cross-fit (kappa- and
-    F1-objective) inside every replicate, evaluate on the replicate."""
+    F1-objective) inside every replicate, evaluate on the replicate.
+    ``return_reps`` (followup2 only) adds the per-replicate query weights and
+    held-out F1@2 under key "reps"; the summary is unchanged."""
     idx = boot_indices(fc["nq"], B, seed)
     Wq = np.stack([np.bincount(r, minlength=fc["nq"]) for r in idx])\
         .astype(float)
     f1_raw = endpoints(np.einsum("bq,qij->bij", Wq, fc["ccm"][RAW_C]))["F1@2"]
-    d, oks, dials = {}, {}, {}
+    d, oks, dials, f1s = {}, {}, {}, {}
     for name, fitter in (("REFIT", fit_kappa_vec), ("F1REFIT", fit_f1_vec)):
         combos, ok, cm = crossfit_vec(fc, Wq, fitter)
-        x = endpoints(cm)["F1@2"] - f1_raw
+        f1s[name] = endpoints(cm)["F1@2"]
+        x = f1s[name] - f1_raw
         x[~ok] = np.nan
         d[name], oks[name] = x, ok
         vals, cts = np.unique(COMBO_DIAL[combos[ok]].ravel(), return_counts=True)
         dials[name] = {f"L{v}": int(c) for v, c in zip(vals, cts)}
     both = oks["REFIT"] & oks["F1REFIT"]
     dd = np.where(both, d["F1REFIT"] - d["REFIT"], np.nan)
-    return {"B": B, "seed": seed,
+    out = {"B": B, "seed": seed,
             "n_ok": {k: int(v.sum()) for k, v in oks.items()},
             "dial_freq_fold_fits": dials,
             "REFIT-RAW F1@2": {"ci90": _ci90(d["REFIT"]),
@@ -2378,6 +2410,9 @@ def nested_bootstrap(fc: dict, B: int, seed: int) -> dict:
                                  "mean": fnum(np.nanmean(d["F1REFIT"]))},
             "F1REFIT-REFIT F1@2": {"ci90": _ci90(dd),
                                    "mean": fnum(np.nanmean(dd))}}
+    if return_reps:
+        out["reps"] = {"Wq": Wq, "RAW": f1_raw, "ok": oks, **f1s}
+    return out
 
 
 def _dist(x) -> dict:
@@ -2391,10 +2426,13 @@ def _dist(x) -> dict:
             "min": float(x.min()), "max": float(x.max())}
 
 
-def e6_prime(fc: dict, sizes, B: int, seed: int) -> dict:
+def e6_prime(fc: dict, sizes, B: int, seed: int,
+             fallback: bool = False) -> dict:
     """(E) E6': calibrate on q WHOLE queries (simple random sample without
     replacement), refit, evaluate dF1@2 (REFIT - RAW) on the query-disjoint
-    extension pool (all other queries)."""
+    extension pool (all other queries).  ``fallback`` (followup2 only) adds
+    the RAW-fallback rate: share of evaluated draws whose fitted rule is
+    RAW (L3 / identity map)."""
     nq, ppq = fc["nq"], fc["ppq"]
     out = {"ppq": _dist(ppq), "B": B, "seed": seed, "sizes": {}}
     for q in sizes:
@@ -2428,6 +2466,11 @@ def e6_prime(fc: dict, sizes, B: int, seed: int) -> dict:
                        "frac_ge0": float((d >= 0).mean()) if d.size else None})
             vals, cts = np.unique(COMBO_DIAL[c[okd]], return_counts=True)
             st["dial_freq"] = {f"L{v}": int(n) for v, n in zip(vals, cts)}
+            if fallback:
+                ce = c[okd & np.isfinite(F1[np.arange(B), c] - F1[:, RAW_C])]
+                st["raw_fallback_rate"] = (float((ce == RAW_C).mean())
+                                           if ce.size else None)
+                st["n_raw_fallback"] = int((ce == RAW_C).sum())
             row[name] = st
         out["sizes"][key] = row
     out["verdict"] = {name: e6p_verdict(out["sizes"], name)
@@ -2989,6 +3032,937 @@ def cmd_followup(args) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# followup2 — EXPLORATORY: the evaluator's re-run requests on `followup`
+#   (R) RETHRESH baseline: cross-fitted ONE-parameter re-threshold of the L3
+#       vote sum (same 2 folds / fold seed as REFIT), t by train binary kappa
+#       [RETHRESH_K] or train F1@2 [RETHRESH_F1]; paired dF1@2 vs REFIT,
+#       F1REFIT, FROZEN with eval-only AND fit-aware (nested) CIs
+#   (B2) FROZEN:DIAL / FROZEN:MAP (+ RETHRESH) operating-curve verdicts;
+#       grid "ceiling" renamed to an optimistic in-sample reference and the
+#       in-sample best L3 re-threshold printed beside it
+#   (S) fold-seed robustness (--fold-seeds; default 42 only)
+#   (C) --nested-b with replicates-per-tail warning
+#   (E) E6' RAW-fallback rate + confounding / finite-population caveats
+#   header: multiplicity / non-independence / in-sample status
+# `followup` itself is untouched; followup2 re-uses followup_cell() for every
+# section the two share (so those numbers are the same code path).
+# ═══════════════════════════════════════════════════════════════════════════
+
+FU2_FOLD_SEEDS = (42,)
+RT_ARMS = ("RETHRESH_K", "RETHRESH_F1")
+RT_OBJECTIVE = {"RETHRESH_K": "kappa", "RETHRESH_F1": "F1"}
+RT_CONTRASTS = (("REFIT", "RETHRESH_K"), ("F1REFIT", "RETHRESH_F1"),
+                ("FROZEN", "RETHRESH_K"), ("FROZEN", "RETHRESH_F1"))
+RT_EXTRA = (("RETHRESH_K", "RAW"), ("RETHRESH_F1", "RAW"))
+GRID_REF_NOTE = ("in-sample best-of-grid F1 (optimistic reference, NOT an "
+                 "upper bound)")
+NESTED_TAIL_MIN = 50
+CURVE_ARMS2 = ("RAW", "FROZEN", "FROZEN:DIAL", "FROZEN:MAP", "REFIT",
+               "REFIT:DIAL", "REFIT:MAP", "F1REFIT", "RETHRESH_K",
+               "RETHRESH_F1")
+SEED_CURVE_ARMS = ("REFIT", "F1REFIT", "RETHRESH_K", "RETHRESH_F1")
+SEED_C_DIFFS = (("F1REFIT", "RAW"), ("F1REFIT", "REFIT"),
+                ("REFIT", "RAW")) + RT_CONTRASTS
+HEAVY_OVERLAP = 0.25
+RT_NOTE = ("RETHRESH = query-disjoint 2-fold cross-fit (same folds as REFIT) "
+           "of ONE threshold t on the L3 vote sum v = K*mean (positive iff "
+           "v >= t, t = 1..3K); train objective = Cohen's kappa of the binary "
+           "decision (v >= t vs human >= 2; linear == unweighted for 2 "
+           "classes) [RETHRESH_K] or train F1@2 [RETHRESH_F1]; ties -> the "
+           "RAW-equivalent t first, then lower t")
+
+
+def rethresh_cache(fc: dict, cell: dict) -> dict:
+    """Per-query TP / n_pos of every L3 vote-sum threshold (the opcurve()
+    variable: positive iff vsum*K >= t*n_records, t = 1..3K)."""
+    h, cnt3 = cell["h"], cell["cnt"][2]
+    nrec = cnt3.sum(axis=1)
+    vsum = cnt3 @ np.arange(4)
+    vals, freq = np.unique(nrec, return_counts=True)
+    K = int(vals[np.argmax(freq)])
+    ts = np.arange(1, 3 * K + 1, dtype=np.int64)
+    yp = vsum[None, :] * K >= ts[:, None] * nrec[None, :]            # [T, nP]
+    yt = h >= 2
+    pq, nq = fc["pair_q"], fc["nq"]
+    tp = np.stack([np.bincount(pq, weights=(y & yt).astype(float),
+                               minlength=nq) for y in yp])           # [T, nq]
+    lr = np.stack([np.bincount(pq, weights=y.astype(float), minlength=nq)
+                   for y in yp])
+    raw_bin = fc["labs"][RAW_C] >= 2
+    raw_t = [int(t) for t, y in zip(ts, yp) if np.array_equal(y, raw_bin)]
+    t_raw = raw_t[0] if raw_t else int(np.ceil(1.5 * K))
+    pref = np.array([t_raw] + [int(t) for t in ts if t != t_raw],
+                    dtype=np.int64) - 1
+    return {"K": K, "ts": ts, "tp": tp, "lr": lr, "raw_t": raw_t,
+            "t_raw": t_raw, "t_raw_exact": bool(raw_t), "pref": pref,
+            "yp": yp}
+
+
+def _bin_eps(tp, lr, hr) -> dict:
+    tp, lr, hr = (np.asarray(x, dtype=float) for x in (tp, lr, hr))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return {"F1@2": 2.0 * tp / (lr + hr), "P@2": tp / lr,
+                "R@2": tp / hr, "ratio@2": lr / hr}
+
+
+def _bin_kappa(TP, LR, HR, N) -> np.ndarray:
+    """Cohen's kappa of a 2x2 table from (TP, n_pred_pos, n_true_pos, N)."""
+    TP, LR, HR, N = (np.asarray(x, dtype=float) for x in (TP, LR, HR, N))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        po = (N - LR - HR + 2.0 * TP) / N
+        pe = (LR * HR + (N - LR) * (N - HR)) / (N * N)
+        k = (po - pe) / (1.0 - pe)
+    return np.where((N > 0) & (pe != 1.0) & np.isfinite(k), k, np.nan)
+
+
+def rt_scores(rc: dict, fc: dict, Wt, objective: str) -> np.ndarray:
+    """Train score of every threshold t on query weights Wt -> [B, T]."""
+    Wt = np.atleast_2d(np.asarray(Wt, dtype=float))
+    TP, LR = Wt @ rc["tp"].T, Wt @ rc["lr"].T
+    HR, N = (Wt @ fc["hr"])[:, None], (Wt @ fc["ppq"])[:, None]
+    if objective == "kappa":
+        return _bin_kappa(TP, LR, HR, N)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(LR + HR > 0, 2.0 * TP / (LR + HR), np.nan)
+
+
+def rt_pick(rc: dict, fc: dict, Wt, objective: str):
+    """argmax of the train objective; ties (and an all-undefined objective)
+    -> RAW-equivalent t first, then lower t.  Returns (t index [B], ok [B])."""
+    Wt = np.atleast_2d(np.asarray(Wt, dtype=float))
+    S = rt_scores(rc, fc, Wt, objective)
+    S = np.where(np.isfinite(S), S, -np.inf)[:, rc["pref"]]
+    return rc["pref"][np.argmax(S, axis=1)], Wt.sum(axis=1) > 0
+
+
+def rt_crossfit(rc: dict, fc: dict, qfold, Wq, objective: str):
+    """2-fold query-disjoint cross-fit of t (fold of a query fixed, as in
+    crossfit_vec).  Returns (t index [B,2], ok [B], test sums tp/lr/hr [B])."""
+    Wq = np.atleast_2d(np.asarray(Wq, dtype=float))
+    B = Wq.shape[0]
+    tsel = np.full((B, 2), rc["t_raw"] - 1, dtype=np.int64)
+    ok = np.ones(B, dtype=bool)
+    TP, LR, HR = np.zeros(B), np.zeros(B), np.zeros(B)
+    ar = np.arange(B)
+    for k in (0, 1):
+        infold = qfold == k
+        tr, te = Wq * (~infold), Wq * infold
+        j, okk = rt_pick(rc, fc, tr, objective)
+        ok &= okk & (te.sum(axis=1) > 0)
+        j = np.where(ok, j, rc["t_raw"] - 1)
+        tsel[:, k] = j
+        TP += (te @ rc["tp"].T)[ar, j]
+        LR += (te @ rc["lr"].T)[ar, j]
+        HR += te @ fc["hr"]
+    return tsel, ok, {"tp": TP, "lr": LR, "hr": HR}
+
+
+def _sign3(x, tie: float) -> str:
+    if x is None or not np.isfinite(x):
+        return "n/a"
+    return "+" if x > tie else "-" if x < -tie else "0"
+
+
+def _beats(x) -> str:
+    s = _sign3(x, TIE_F1)
+    return {"+": "beats", "-": "below", "0": "within"}.get(s, "n/a")
+
+
+def nested_tail_note(B: int) -> dict:
+    per_tail = 0.05 * B
+    return {"B": B, "replicates_per_tail": per_tail,
+            "warn": bool(B and per_tail < NESTED_TAIL_MIN)}
+
+
+def seed_robustness(cell: dict, fc: dict, rc: dict, cZ: int, fold_seeds,
+                    versus, primary: dict) -> dict:
+    """Point estimates of the REFIT 2x2 attribution, curve verdicts and the
+    C-section / RETHRESH paired dF1@2 at every fold seed (no nested CIs).
+    The primary-seed row is hard-checked against ``primary``."""
+    ds, nq = cell["dataset"], fc["nq"]
+    ones = np.ones((1, nq))
+    per: dict = {}
+    for s in fold_seeds:
+        fcs = dict(fc)
+        fcs["qfold"] = np.array([fold_of(ds, q, s) for q in fc["qname"]],
+                                dtype=np.int64)
+        lab, rules_r, _pf, why = crossfit(cell, s)
+        if lab is None:
+            per[str(s)] = {"error": why}
+            continue
+        want = [combo_of(r["dial_level"], r["monotone_map"])
+                for r in sorted(rules_r, key=lambda r: r["test_fold"])]
+        ck, okk, _cm = crossfit_vec(fcs, ones, fit_kappa_vec)
+        if not okk[0] or [int(x) for x in ck[0]] != want:
+            sys.exit(f"ERROR: '{cell['model']}' @ {ds} fold seed {s}: "
+                     f"vectorised kappa fitter chose "
+                     f"{[combo_name(x) for x in ck[0]]} but batch-4 fit_rule "
+                     f"chose {[combo_name(x) for x in want]}.")
+        cF, _okF, _cmF = crossfit_vec(fcs, ones, fit_f1_vec)
+        cF = [int(x) for x in cF[0]]
+        arms = {"RAW": [RAW_C, RAW_C],
+                "DIAL": [combo_of(COMBOS[c][0], IDENTITY_MAP) for c in want],
+                "MAP": [combo_of(3, COMBOS[c][1]) for c in want],
+                "FULL": want, "F1REFIT": cF, "FROZEN": [cZ, cZ]}
+        pts, _r, _l = arm_eval(fcs, {nm: arm_query_combos(fcs, cc)
+                                     for nm, cc in arms.items()}, ones)
+        att = {}
+        for ep in ("F1@2", "absdev@2"):
+            p = {x: pts[x][ep] for x in ("RAW", "DIAL", "MAP", "FULL")}
+            att[ep] = {"total": p["FULL"] - p["RAW"], "dial": p["DIAL"] - p["RAW"],
+                       "map": p["MAP"] - p["RAW"],
+                       "interaction": (p["FULL"] - p["DIAL"])
+                       - (p["MAP"] - p["RAW"])}
+        f1 = {"RAW": pts["RAW"]["F1@2"], "FROZEN": pts["FROZEN"]["F1@2"],
+              "REFIT": pts["FULL"]["F1@2"], "F1REFIT": pts["F1REFIT"]["F1@2"]}
+        ratio = {"REFIT": pts["FULL"]["ratio@2"],
+                 "F1REFIT": pts["F1REFIT"]["ratio@2"]}
+        rts = {}
+        for nm in RT_ARMS:
+            tsel, okr, sm = rt_crossfit(rc, fc, fcs["qfold"], ones,
+                                        RT_OBJECTIVE[nm])
+            e = _bin_eps(sm["tp"], sm["lr"], sm["hr"])
+            f1[nm] = float(e["F1@2"][0]) if okr[0] else np.nan
+            ratio[nm] = float(e["ratio@2"][0]) if okr[0] else np.nan
+            rts[nm] = [int(rc["ts"][j]) for j in tsel[0]]
+        curve = {}
+        for nm in SEED_CURVE_ARMS:
+            _cf, dlt, v = versus(f1[nm], ratio[nm])
+            curve[nm] = {"dF1_vs_curve": dlt, "vs_curve": v}
+        per[str(s)] = {
+            "REFIT_rules": [combo_name(c) for c in want],
+            "F1REFIT_rules": [combo_name(c) for c in cF],
+            "RETHRESH_t": rts,
+            "attribution": att, "curve": curve,
+            "dF1@2": {f"{a}-{b}": f1[a] - f1[b] for a, b in SEED_C_DIFFS},
+        }
+    # primary-seed row == the primary analysis (same code path, bit-exact)
+    p0 = per.get(str(fold_seeds[0]), {})
+    if "error" not in p0:
+        bad = []
+        for ep in ("F1@2", "absdev@2"):
+            for k in ("total", "dial", "map", "interaction"):
+                if not _same(p0["attribution"][ep][k],
+                             primary["attribution"][ep][k]):
+                    bad.append(f"attr {ep} {k}")
+        for k, v in primary["dF1@2"].items():
+            if not _same(p0["dF1@2"][k], v):
+                bad.append(f"dF1 {k}")
+        for nm in SEED_CURVE_ARMS:
+            if p0["curve"][nm]["vs_curve"] != primary["curve"][nm]:
+                bad.append(f"curve {nm}")
+        if bad:
+            sys.exit(f"ERROR: '{cell['model']}' @ {ds}: fold-seed robustness "
+                     f"row for the primary seed differs from the primary "
+                     f"analysis: {bad[:6]}")
+    # per-metric table + sign flips relative to the primary seed
+    ok_seeds = [str(s) for s in fold_seeds if "error" not in per[str(s)]]
+    table = {}
+
+    def add(key, vals, tie):
+        if not vals:
+            return
+        s0 = _sign3(vals[0], tie)
+        sg = [_sign3(v, tie) for v in vals]
+        table[key] = {"values": vals, "signs": sg,
+                      "flips": sum(x != s0 for x in sg[1:]),
+                      "hard_flips": sum({x, s0} == {"+", "-"} for x in sg[1:]),
+                      "tie": tie}
+    for ep, tie in (("F1@2", TIE_F1), ("absdev@2", TIE_RATIO)):
+        for k in ("total", "dial", "map", "interaction"):
+            add(f"REFIT attr {ep} {k}",
+                [per[s]["attribution"][ep][k] for s in ok_seeds], tie)
+    for a, b in SEED_C_DIFFS:
+        add(f"dF1@2 {a}-{b}", [per[s]["dF1@2"][f"{a}-{b}"] for s in ok_seeds],
+            TIE_F1)
+    for nm in SEED_CURVE_ARMS:
+        vs = [per[s]["curve"][nm]["vs_curve"] for s in ok_seeds]
+        if vs:
+            table[f"curve {nm}"] = {
+                "values": [per[s]["curve"][nm]["dF1_vs_curve"] for s in ok_seeds],
+                "signs": vs, "flips": sum(v != vs[0] for v in vs[1:]),
+                "hard_flips": sum({v, vs[0]} == {"above", "below"}
+                                  for v in vs[1:]), "tie": TIE_F1}
+    return {"seeds": [int(s) for s in fold_seeds], "ok_seeds": ok_seeds,
+            "per_seed": per, "table": table,
+            "note": "point estimates only; the nested (fit-aware) bootstrap is "
+                    "run for the primary seed only; FROZEN is seed-invariant"}
+
+
+def followup2_cell(cell: dict, rule: dict, B: int, nested_b: int, seed: int,
+                   fold_seeds, e6p_sizes, e6p_B: int, stored=None) -> dict:
+    fs0 = int(fold_seeds[0])
+    # every section shared with `followup` comes from followup_cell itself
+    # (nested bootstrap and E6' are re-run below with their followup2 extras)
+    res = followup_cell(cell, rule, B, 0, seed, fs0, None, e6p_B, stored)
+    if "error" in res:
+        return res
+    model, ds = cell["model"], cell["dataset"]
+    nq = cell["n_queries"]
+    ar = np.arange(nq)
+    fc = followup_cache(cell, fs0)
+    rc = rethresh_cache(fc, cell)
+    oc = res["opcurve"]
+    if rc["K"] != oc["K_records_mode"] or rc["raw_t"] != oc["raw_equivalent_t"]:
+        sys.exit(f"ERROR: '{model}' @ {ds}: RETHRESH curve variable differs "
+                 f"from opcurve() (K {rc['K']} vs {oc['K_records_mode']}, RAW t "
+                 f"{rc['raw_t']} vs {oc['raw_equivalent_t']}).")
+    fx = res["factorial"]
+    cZ = combo_of(rule["dial_level"], rule["monotone_map"])
+    want = [combo_of(fx["REFIT"]["choices"]["dial"][k],
+                     fx["REFIT"]["choices"]["map"][k]) for k in (0, 1)]
+    cF = [combo_of(r["dial_level"], r["monotone_map"])
+          for r in sorted(res["f1_refit"]["rules"], key=lambda r: r["test_fold"])]
+    res["rule_frozen"]["fitted_on"] = list(rule["datasets"])
+    res["rule_frozen"]["n_pairs_fit"] = rule.get("n_pairs")
+
+    # ── (R) RETHRESH: full-data cross-fit, per-query statistics ───────────
+    q_tp, q_lr = {}, {}
+    for nm, cc in (("RAW", [RAW_C, RAW_C]), ("FROZEN", [cZ, cZ]),
+                   ("REFIT", want), ("F1REFIT", cF)):
+        cq = arm_query_combos(fc, cc)
+        q_tp[nm], q_lr[nm] = fc["tp"][cq, ar], fc["lr"][cq, ar]
+    ones = np.ones((1, nq))
+    rt = {}
+    for nm in RT_ARMS:
+        obj = RT_OBJECTIVE[nm]
+        tsel, okr, _sm = rt_crossfit(rc, fc, fc["qfold"], ones, obj)
+        if not okr[0]:
+            sys.exit(f"ERROR: '{model}' @ {ds}: RETHRESH cross-fit failed on "
+                     f"the full data although REFIT succeeded.")
+        j = np.where(fc["qfold"] == 0, tsel[0, 0], tsel[0, 1])
+        q_tp[nm], q_lr[nm] = rc["tp"][j, ar], rc["lr"][j, ar]
+        folds = []
+        for k in (0, 1):
+            tr = (fc["qfold"] != k).astype(float)[None, :]
+            S = rt_scores(rc, fc, tr, obj)[0]
+            folds.append({"test_fold": k, "t": int(rc["ts"][tsel[0, k]]),
+                          f"train_{obj}": fnum(S[tsel[0, k]]),
+                          f"train_{obj}_at_RAW_t": fnum(S[rc["t_raw"] - 1])})
+        rt[nm] = {"objective": obj, "folds": folds}
+    hrq = fc["hr"]
+    pts = {nm: {ep: float(v) for ep, v in
+                _bin_eps(q_tp[nm].sum(), q_lr[nm].sum(), hrq.sum()).items()}
+           for nm in q_tp}
+    for nm, src in (("RAW", fx["REFIT"]["arms"]["RAW"]["point"]),
+                    ("FROZEN", fx["FROZEN"]["arms"]["FULL"]["point"]),
+                    ("REFIT", fx["REFIT"]["arms"]["FULL"]["point"]),
+                    ("F1REFIT", res["f1_refit"]["point"])):
+        for ep in ("F1@2", "P@2", "R@2", "ratio@2"):
+            if not _same(pts[nm][ep], src[ep]):
+                sys.exit(f"ERROR: '{model}' @ {ds}: followup2 {nm} {ep} "
+                         f"{pts[nm][ep]} differs from followup's {src[ep]}.")
+    idx = boot_indices(nq, B, seed)
+    Wt = np.stack([np.bincount(r, minlength=nq) for r in idx]).astype(float)
+    HRb = Wt @ hrq
+    reps = {nm: _bin_eps(Wt @ q_tp[nm], Wt @ q_lr[nm], HRb) for nm in q_tp}
+    if _ci90(reps["REFIT"]["F1@2"] - reps["RAW"]["F1@2"]) != \
+            res["f1_refit"]["diff"]["REFIT-RAW"]["F1@2"]["ci90"]:
+        sys.exit(f"ERROR: '{model}' @ {ds}: followup2 eval-only bootstrap "
+                 f"differs from followup's (REFIT-RAW F1@2).")
+    for nm in RT_ARMS:
+        rt[nm]["point"] = pts[nm]
+        rt[nm]["ci90"] = {ep: _ci90(reps[nm][ep]) for ep in pts[nm]}
+
+    # ── (C) nested (fit-aware) bootstrap: followup's + RETHRESH, paired ───
+    nb, nested = None, {}
+    if nested_b:
+        nb = nested_bootstrap(fc, nested_b, seed, return_reps=True)
+        nr = nb.pop("reps")
+        Wq = nr["Wq"]
+        HRn = Wq @ hrq
+        f1n = {"RAW": nr["RAW"],
+               "REFIT": np.where(nr["ok"]["REFIT"], nr["REFIT"], np.nan),
+               "F1REFIT": np.where(nr["ok"]["F1REFIT"], nr["F1REFIT"], np.nan),
+               "FROZEN": _bin_eps(Wq @ q_tp["FROZEN"], Wq @ q_lr["FROZEN"],
+                                  HRn)["F1@2"]}
+        tfreq = {}
+        for nm in RT_ARMS:
+            tsel, okr, sm = rt_crossfit(rc, fc, fc["qfold"], Wq,
+                                        RT_OBJECTIVE[nm])
+            f1n[nm] = np.where(okr, _bin_eps(sm["tp"], sm["lr"],
+                                             sm["hr"])["F1@2"], np.nan)
+            v, c = np.unique(rc["ts"][tsel[okr]].ravel(), return_counts=True)
+            tfreq[nm] = {f"t{int(a)}": int(b) for a, b in zip(v, c)}
+        if _ci90(f1n["REFIT"] - f1n["RAW"]) != nb["REFIT-RAW F1@2"]["ci90"]:
+            sys.exit(f"ERROR: '{model}' @ {ds}: nested replicates do not "
+                     f"reproduce nested_bootstrap's REFIT-RAW CI.")
+        for a, b in RT_CONTRASTS + RT_EXTRA:
+            x = f1n[a] - f1n[b]
+            nested[f"{a}-{b}"] = {"ci90": _ci90(x),
+                                  "mean": fnum(np.nanmean(x))
+                                  if np.isfinite(x).any() else None}
+        nested["t_freq_fold_fits"] = tfreq
+    res["f1_refit"]["nested"] = nb
+    tail = nested_tail_note(nested_b)
+    contrasts = {}
+    for a, b in RT_CONTRASTS + RT_EXTRA:
+        k = f"{a}-{b}"
+        pnt = pts[a]["F1@2"] - pts[b]["F1@2"]
+        contrasts[k] = {"point": pnt,
+                        "ci90": _ci90(reps[a]["F1@2"] - reps[b]["F1@2"]),
+                        "nested_ci90": nested.get(k, {}).get("ci90"),
+                        "nested_mean": nested.get(k, {}).get("mean"),
+                        "verdict": _beats(pnt)}
+    res["rethresh"] = {
+        "note": RT_NOTE, "K": rc["K"], "t_range": [1, 3 * rc["K"]],
+        "t_raw": rc["t_raw"], "t_raw_exact": rc["t_raw_exact"],
+        "arms": rt, "contrasts": contrasts,
+        "nested": {"B": nested_b, "seed": seed, "tail": tail,
+                   "t_freq_fold_fits": nested.get("t_freq_fold_fits")},
+        "ci_note": "ci90: evaluation-only query bootstrap (fits held fixed); "
+                   "nested_ci90: fit-aware (REFIT / F1REFIT / RETHRESH all "
+                   "re-fitted per replicate; FROZEN and RAW need no fit)",
+    }
+
+    # ── (B2) operating-curve verdicts incl. FROZEN:DIAL / FROZEN:MAP ──────
+    marks = {"RAW": RAW_C, "FROZEN": cZ}
+    _rows, _oc, versus = opcurve(fc, cell, marks, {"REFIT": want,
+                                                   "F1REFIT": cF})
+    src = {"RAW": pts["RAW"], "FROZEN": pts["FROZEN"],
+           "FROZEN:DIAL": fx["FROZEN"]["arms"]["DIAL"]["point"],
+           "FROZEN:MAP": fx["FROZEN"]["arms"]["MAP"]["point"],
+           "REFIT": pts["REFIT"],
+           "REFIT:DIAL": fx["REFIT"]["arms"]["DIAL"]["point"],
+           "REFIT:MAP": fx["REFIT"]["arms"]["MAP"]["point"],
+           "F1REFIT": pts["F1REFIT"], "RETHRESH_K": pts["RETHRESH_K"],
+           "RETHRESH_F1": pts["RETHRESH_F1"]}
+    points2 = {}
+    for nm in CURVE_ARMS2:
+        p = src[nm]
+        cf, dlt, v = versus(p["F1@2"], p["ratio@2"])
+        points2[nm] = {"ratio@2": p["ratio@2"], "F1@2": p["F1@2"],
+                       "curve_F1_at_ratio": cf, "dF1_vs_curve": dlt,
+                       "vs_curve": v}
+        if nm in oc["points"] and oc["points"][nm]["vs_curve"] != v:
+            sys.exit(f"ERROR: '{model}' @ {ds}: curve verdict for {nm} differs "
+                     f"from followup's.")
+    l3 = oc["curve_best"]
+    gref = dict(oc.pop("grid_ceiling"), note=GRID_REF_NOTE)
+    oc["grid_best_insample"] = gref
+    res["opcurve2"] = {
+        "points": points2, "l3_best_insample": l3, "grid_best_insample": gref,
+        "grid_minus_l3_best": gref["F1@2"] - l3["F1@2"],
+        "grid_below_l3_best": bool(gref["F1@2"] < l3["F1@2"] - 1e-12),
+        "grid_exceeded_by": [nm for nm in CURVE_ARMS2
+                             if points2[nm]["F1@2"] > gref["F1@2"] + 1e-12],
+        "above_l3_best_by_tie": [nm for nm in CURVE_ARMS2 if points2[nm]["F1@2"]
+                                 > l3["F1@2"] + TIE_F1],
+        "note": "the 175-combo grid does not contain every L3 re-threshold and "
+                "is chosen on the evaluation data; cross-fit arms (a mixture of "
+                "per-fold rules) can exceed it",
+    }
+
+    # ── (S) fold-seed robustness ──────────────────────────────────────────
+    primary = {"attribution": {ep: {k: fx["REFIT"]["attribution"][ep][k]["point"]
+                                    for k in ("total", "dial", "map",
+                                              "interaction")}
+                               for ep in ("F1@2", "absdev@2")},
+               "dF1@2": {f"{a}-{b}": pts[a]["F1@2"] - pts[b]["F1@2"]
+                         for a, b in SEED_C_DIFFS},
+               "curve": {nm: points2[nm]["vs_curve"] for nm in SEED_CURVE_ARMS}}
+    res["fold_seed_robustness"] = seed_robustness(cell, fc, rc, cZ, fold_seeds,
+                                                  versus, primary)
+
+    # ── (E) E6' with the RAW-fallback rate ────────────────────────────────
+    if e6p_sizes:
+        e6 = e6_prime(fc, e6p_sizes, e6p_B, seed, fallback=True)
+        e6["caveats"] = {
+            "n_queries": nq, "pairs_per_query_mean": e6["ppq"].get("mean"),
+            "q_over_n_queries": {str(q): q / nq for q in e6p_sizes},
+            "heavy_overlap_q": [int(q) for q in e6p_sizes
+                                if q / nq >= HEAVY_OVERLAP
+                                and q <= nq - SE_MIN_POOL_QUERIES],
+        }
+        res["e6_prime"] = e6
+    return res
+
+
+# ───────────────────────────── printing ─────────────────────────────────────
+
+def _grid_lines(o2: dict) -> list[str]:
+    l3, g = o2["l3_best_insample"], o2["grid_best_insample"]
+    out = [f"  in-sample best L3 re-threshold (one parameter, chosen on the "
+           f"evaluation data): t={l3['t']} F1@2={l3['F1@2']:.4f} at "
+           f"ratio@2={l3['ratio@2']:.3f}",
+           f"  {GRID_REF_NOTE}: {g['combo']} F1@2={g['F1@2']:.4f} at "
+           f"ratio@2={g['ratio@2']:.3f}"]
+    if o2["grid_below_l3_best"]:
+        out.append(f"  ** FLAG: the grid reference is BELOW the in-sample best "
+                   f"L3 re-threshold by {-o2['grid_minus_l3_best']:.4f} (the "
+                   f"grid does not contain every L3 threshold) **")
+    if o2["grid_exceeded_by"]:
+        out.append(f"  ** FLAG: exceeded by {', '.join(o2['grid_exceeded_by'])}"
+                   f" (cross-fit mixtures of per-fold rules) — not a ceiling **")
+    return out
+
+
+def print_followup2(res: dict) -> None:
+    import contextlib
+    import io
+    if "error" in res:
+        print_followup(res)
+        return
+    # the shared sections, printed by followup's own printer; only the old
+    # "ceiling" line is replaced (hard-fail if it cannot be found exactly once)
+    view = {**res, "opcurve": {**res["opcurve"],
+                               "grid_ceiling": res["opcurve"]["grid_best_insample"]}}
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        print_followup(view)
+    lines = buf.getvalue().rstrip("\n").split("\n")
+    o2 = res["opcurve2"]
+    tail = res["rethresh"]["nested"]["tail"]
+    tail_line = (f"    nested B={tail['B']}: {tail['replicates_per_tail']:.0f} "
+                 f"replicates per 5% tail"
+                 + (f"  ** WARNING: < {NESTED_TAIL_MIN} per tail — percentile "
+                    f"bounds are Monte-Carlo noisy; re-run borderline cells "
+                    f"with --nested-b 1000 **" if tail["warn"] else ""))
+    out = []
+    n_grid = n_best = n_nest = 0
+    for ln in lines:
+        if ln.startswith("  in-sample best-of-grid F1 ceiling:"):
+            out += _grid_lines(o2)
+            n_grid += 1
+        elif ln.startswith("  L3 threshold-curve best:"):
+            n_best += 1               # re-printed by _grid_lines
+        elif ln.startswith("    nested replicates ok:"):
+            out += [ln, tail_line]
+            n_nest += 1
+        else:
+            out.append(ln)
+    if (n_grid, n_best, n_nest) != (1, 1, int(bool(res["f1_refit"]["nested"]))):
+        sys.exit("ERROR: followup2 printer could not locate followup's grid / "
+                 "curve-best / nested lines exactly once.")
+    print("\n".join(out))
+
+    print("\n  (B2) OPERATING-CURVE VERDICTS at matched ratio@2 (all arms; "
+          f"band TIE_F1={TIE_F1}, a fixed band, not a test)")
+    for nm, p in o2["points"].items():
+        print(f"    {nm:<12} ratio {_f(p['ratio@2'], 6, 3)}  F1 "
+              f"{_f(p['F1@2'], 6, 4)}  curve@ratio "
+              f"{_f(p['curve_F1_at_ratio'], 6, 4)}  d "
+              f"{_f(p['dF1_vs_curve'], 7, 4, True)}  -> {p['vs_curve']}")
+    if o2["above_l3_best_by_tie"]:
+        print(f"    arms above the in-sample best L3 re-threshold by > TIE_F1: "
+              f"{', '.join(o2['above_l3_best_by_tie'])}")
+
+    rr = res["rethresh"]
+    print(f"\n  (R) RETHRESH BASELINE  K={rr['K']}, t={rr['t_range'][0]}.."
+          f"{rr['t_range'][1]}, RAW-equivalent t={rr['t_raw']}"
+          f"{'' if rr['t_raw_exact'] else ' (approx.: no t reproduces RAW exactly)'}")
+    print(f"    {RT_NOTE}")
+    for nm, a in rr["arms"].items():
+        p, c = a["point"], a["ci90"]
+        fl = "; ".join(f"fold {f['test_fold']}: t={f['t']} (train "
+                       f"{a['objective']} {_f(f['train_' + a['objective']], 7, 4)}"
+                       f" vs RAW t {_f(f['train_' + a['objective'] + '_at_RAW_t'], 7, 4)})"
+                       for f in a["folds"])
+        print(f"    {nm:<12} {fl}")
+        print(f"    {'':<12} held-out F1@2 {p['F1@2']:.4f} {_ci(c['F1@2'])}  "
+              f"P@2 {p['P@2']:.4f}  R@2 {p['R@2']:.4f}  ratio@2 "
+              f"{p['ratio@2']:.3f}")
+    for k, c in rr["contrasts"].items():
+        line = (f"    dF1@2 {k:<24} {_f(c['point'], 7, 4, True)} "
+                f"{_ci(c['ci90'])} eval-only")
+        if c["nested_ci90"] is not None:
+            line += f"   {_ci(c['nested_ci90'])} fit-aware (nested B={tail['B']})"
+        if k in {f"{a}-{b}" for a, b in RT_CONTRASTS}:
+            line += f"   -> {c['verdict']}"
+        print(line)
+    tf = rr["nested"]["t_freq_fold_fits"]
+    if tf:
+        print("    nested fold-fit t frequencies: " + "; ".join(
+            f"{nm} {d}" for nm, d in tf.items()))
+
+    sr = res["fold_seed_robustness"]
+    if len(sr["seeds"]) > 1:
+        print(f"\n  (S) FOLD-SEED ROBUSTNESS seeds {sr['seeds']} (point "
+              f"estimates; nested CIs only for the primary seed "
+              f"{sr['seeds'][0]}; FROZEN is seed-invariant)")
+        errs = {s: v["error"] for s, v in sr["per_seed"].items() if "error" in v}
+        if errs:
+            print(f"    seeds skipped: {errs}")
+        hdr = "".join(f"{'s' + s:>9}" for s in sr["ok_seeds"])
+        print(f"    {'metric':<34}{hdr}   flips (band / hard)")
+        for key, t in sr["table"].items():
+            if key.startswith("curve"):
+                vals = "".join(f"{v:>9}" for v in t["signs"])
+            else:
+                vals = "".join(_f(v, 9, 4, True) for v in t["values"])
+            print(f"    {key:<34}{vals}   {t['flips']} / {t['hard_flips']}")
+        for s in sr["ok_seeds"]:
+            ps = sr["per_seed"][s]
+            print(f"    seed {s}: REFIT {ps['REFIT_rules']}  F1REFIT "
+                  f"{ps['F1REFIT_rules']}  RETHRESH_K t={ps['RETHRESH_t']['RETHRESH_K']}"
+                  f"  RETHRESH_F1 t={ps['RETHRESH_t']['RETHRESH_F1']}")
+    else:
+        print(f"\n  (S) fold-seed robustness: primary seed {sr['seeds'][0]} only "
+              f"(pass --fold-seeds 42,43,44,45,46 for the robustness table)")
+
+    e6 = res.get("e6_prime")
+    if e6:
+        cv = e6["caveats"]
+        print(f"\n  (E+) E6' RAW-FALLBACK RATE (share of evaluated draws whose "
+              f"fitted rule is RAW = L3/identity); {cv['n_queries']} queries, "
+              f"{cv['pairs_per_query_mean']:.1f} pairs/query")
+        print(f"    {'q':>3} {'q/n_q':>6}  objective   {'mean dF1':>9} "
+              f"{'median':>8} {'P(cat)':>7} {'RAW-fallback':>13} {'n':>5}")
+        for q, row in e6["sizes"].items():
+            if "skipped" in row:
+                print(f"    {q:>3}  skipped: {row['skipped']}")
+                continue
+            for nm in ("REFIT", "F1REFIT"):
+                st = row[nm]
+                if not st.get("n"):
+                    print(f"    {q:>3}  {nm}: no successful draws")
+                    continue
+                print(f"    {q:>3} {cv['q_over_n_queries'][q]:>6.2f}  "
+                      f"{'kappa' if nm == 'REFIT' else 'F1':<10}"
+                      f"{st['mean']:>+9.4f} {st['median']:>+8.4f} "
+                      f"{st['frac_catastrophic']:>7.3f} "
+                      f"{st['raw_fallback_rate']:>13.3f} {st['n']:>5}")
+        if cv["heavy_overlap_q"]:
+            print(f"    finite population: q in {cv['heavy_overlap_q']} samples "
+                  f">= {HEAVY_OVERLAP:.0%} of the {cv['n_queries']} queries — "
+                  f"calibration draws overlap heavily, so their spread (and "
+                  f"P(cat)) is understated")
+
+
+def rethresh_tally(results) -> dict:
+    ok = [r for r in results if "error" not in r]
+    out = {}
+    for a, b in RT_CONTRASTS:
+        k = f"{a}-{b}"
+        v = [r["rethresh"]["contrasts"][k]["verdict"] for r in ok]
+        out[k] = {"beats": v.count("beats"), "within": v.count("within"),
+                  "below": v.count("below"), "n": len(v)}
+    return out
+
+
+def print_rethresh_tally(tally: dict, label: str) -> None:
+    def part(k):
+        t = tally[k]
+        a, b = k.split("-")
+        return (f"{a} vs {b}: beats {t['beats']} / within {t['within']} / "
+                f"below {t['below']}")
+    n = tally[f"{RT_CONTRASTS[0][0]}-{RT_CONTRASTS[0][1]}"]["n"]
+    print(f"  RETHRESH tally {label} ({n} cells; dF1@2 point estimate, band "
+          f"TIE_F1={TIE_F1}; descriptive, no test):")
+    print("    kappa-objective: " + part("REFIT-RETHRESH_K") + ";  "
+          + part("FROZEN-RETHRESH_K"))
+    print("    F1-objective:    " + part("F1REFIT-RETHRESH_F1") + ";  "
+          + part("FROZEN-RETHRESH_F1"))
+
+
+def _vendor(model: str) -> str:
+    return model.split("/", 1)[0] if "/" in model else model
+
+
+def followup2_header(res: dict, datasets, meta: dict) -> dict:
+    """Run-level caveats, read from the results (judges, datasets, rules)."""
+    ok = [r for ds in datasets for r in res[ds] if "error" not in r]
+    judges = sorted({r["model"] for r in ok})
+    fam: dict = {}
+    for j in judges:
+        fam.setdefault(_vendor(j), []).append(j)
+    same = {k: v for k, v in fam.items() if len(v) > 1}
+    return {"n_cells": len(ok), "n_judges": len(judges),
+            "datasets": [ds for ds in datasets
+                         if any("error" not in r for r in res[ds])],
+            "same_vendor_judges": same,
+            "multiplicity": "no multiplicity correction; cells share queries "
+                            "and human labels within a dataset and same-vendor "
+                            "judges are not independent; every count/tally is "
+                            "descriptive"}
+
+
+def print_followup2_header(h: dict, meta: dict) -> None:
+    print()
+    print("=" * 96)
+    print(f"  BATCH 6 FOLLOW-UP 2   *** {EXPLORATORY} ***")
+    print("=" * 96)
+    print(f"  code git {meta['git_hash']} (dirty: {meta['code_dirty']})  "
+          f"rules_sha256 {meta['rules_sha256'][:12]}  fold seeds "
+          f"{meta['fold_seeds']} (primary {meta['fold_seeds'][0]})  B={meta['B']}"
+          f"  nested B={meta['nested_b']}  E6' B={meta['e6p_B']} "
+          f"q={meta['e6p_q_sizes']}")
+    print("  DESIGN: designed AFTER unboxing at the evaluator's request; "
+          "'held-out' for dl22 means only that the frozen rule was never "
+          "fitted there.")
+    same = "; ".join(f"{k}: {len(v)} judges" for k, v in
+                     h["same_vendor_judges"].items()) or "none"
+    print(f"  MULTIPLICITY / NON-INDEPENDENCE: {h['n_cells']} cells "
+          f"({h['n_judges']} judges x {len(h['datasets'])} datasets "
+          f"{h['datasets']}); many contrasts per cell; same-vendor (same-"
+          f"family) judges: {same}.")
+    print(f"    {h['multiplicity']}.")
+    nt = nested_tail_note(meta["nested_b"])
+    if meta["nested_b"]:
+        print(f"  NESTED BOOTSTRAP: B={nt['B']} -> {nt['replicates_per_tail']:.0f}"
+              f" replicates per 5% tail"
+              + (f"  ** WARNING: < {NESTED_TAIL_MIN}; use --nested-b 1000 for "
+                 f"borderline cells **" if nt["warn"] else ""))
+    print("  FRAMING: operating-point artifact removal against THESE "
+          "annotators, never judgment quality.")
+
+
+def print_dataset_header2(ds: str, results: list[dict], meta: dict) -> None:
+    ok = [r for r in results if "error" not in r]
+    print()
+    print("=" * 96)
+    print(f"  FOLLOW-UP 2   dataset={ds}   *** {EXPLORATORY} ***")
+    print("=" * 96)
+    notes: dict = {}
+    for r in ok:
+        notes.setdefault(r["rule_frozen"]["in_sample"], []).append(r["model"])
+    for n, js in notes.items():
+        print(f"  IN-SAMPLE STATUS (frozen rule, from correction_rules.json "
+              f"'datasets'): {n}" + ("" if len(notes) == 1 else
+                                     f"  [{', '.join(js)}]"))
+    print("  REFIT / F1REFIT / RETHRESH are query-disjoint 2-fold cross-fits "
+          "on this dataset (held-out within the dataset).")
+    fl = [r for r in ok if r["info"].get("flagship")]
+    for r in fl:
+        print(f"  SUBSAMPLE: {r['model']} is restricted to inputs/pairs_{ds}_"
+              f"flagship40.jsonl — its frozen rule was fitted on the flagship "
+              f"subsample (rule n_pairs={r['rule_frozen'].get('n_pairs_fit') or 'n/a'}, "
+              f"fitted on {'+'.join(r['rule_frozen'].get('fitted_on', []))}) and "
+              f"is evaluated on {r['n_pairs']} pairs / {r['n_queries']} queries "
+              f"({r['n_pairs'] / r['n_queries']:.1f} pairs/query)")
+    e6 = [r for r in ok if r.get("e6_prime")]
+    if e6:
+        ppq = ", ".join(f"{judge_slug(r['model'])} "
+                        f"{r['e6_prime']['caveats']['pairs_per_query_mean']:.1f}"
+                        for r in e6)
+        print(f"  E6' CAVEATS: q (calibration QUERIES) is confounded with "
+              f"pairs-per-query (mean pairs/query: {ppq}).")
+        for nq in sorted({r["n_queries"] for r in e6}):
+            fr = ", ".join(f"q={q}: {q / nq:.2f}"
+                           + (" HEAVY" if q / nq >= HEAVY_OVERLAP else "")
+                           for q in meta["e6p_q_sizes"]
+                           if q <= nq - SE_MIN_POOL_QUERIES)
+            print(f"    finite population ({nq} queries): q/n_queries = "
+                  f"expected overlap of two draws — {fr}")
+
+
+# ───────────────────────────── outputs ──────────────────────────────────────
+
+def write_followup2(results: list[dict], ds: str, data_dir: Path,
+                    meta: dict, header: dict) -> None:
+    der = data_dir / "derived"
+    tex_dir = der / "tex"
+    der.mkdir(parents=True, exist_ok=True)
+    ok = [r for r in results if "error" not in r]
+    stamp = f"[{EXPLORATORY}] "
+
+    def nci(c):
+        return "" if c is None else f" {_tci(c)}"
+    rows = []
+    for r in ok:
+        rr = r["rethresh"]
+        cells = []
+        for nm in RT_ARMS:
+            p = rr["arms"][nm]["point"]
+            ts = ",".join(str(f["t"]) for f in rr["arms"][nm]["folds"])
+            cells.append(f"{_t(p['F1@2'])} {_tci(rr['arms'][nm]['ci90']['F1@2'])}"
+                         f" & {_t(p['P@2'])} & {_t(p['R@2'])} & "
+                         f"{_t(p['ratio@2'])} ({ts})")
+        for a, b in RT_CONTRASTS:
+            c = rr["contrasts"][f"{a}-{b}"]
+            cells.append(f"{_t(c['point'], sign=True)} {_tci(c['ci90'])}"
+                         f"{nci(c['nested_ci90'])}")
+        rows.append(f"{esc(r['model'])} & " + " & ".join(cells) + " \\\\")
+    write_tex(tex_dir, f"batch6_followup2_{ds}_rethresh.tex", rows,
+              f"{stamp}Batch 6 follow-up 2 (R) on {ds}: RETHRESH baseline = "
+              f"query-disjoint 2-fold cross-fit (fold seed "
+              f"{meta['fold_seeds'][0]}) of one threshold t on the L3 vote sum,"
+              f" t chosen by train binary kappa (RETHRESH\\_K) or train F1@2 "
+              f"(RETHRESH\\_F1). Columns: judge; for RETHRESH\\_K then "
+              f"RETHRESH\\_F1: held-out F1@2 [90\\% CI], P@2, R@2, ratio@2 "
+              f"(t per test fold); dF1@2 REFIT-RETHRESH\\_K, F1REFIT-"
+              f"RETHRESH\\_F1, FROZEN-RETHRESH\\_K, FROZEN-RETHRESH\\_F1, each "
+              f"with the evaluation-only 90\\% CI (B={meta['B']}) then the "
+              f"fit-aware nested 90\\% CI (B={meta['nested_b']}).")
+    rows = []
+    dag = "$^\\dagger$"
+    for r in ok:
+        o2 = r["opcurve2"]
+        rows.append(
+            f"{esc(r['model'])} & {_t(o2['l3_best_insample']['F1@2'])} "
+            f"({o2['l3_best_insample']['t']}) & "
+            f"{_t(o2['grid_best_insample']['F1@2'])}"
+            f"{dag if o2['grid_below_l3_best'] else ''} & "
+            + " & ".join(f"{_t(o2['points'][k]['dF1_vs_curve'], sign=True)}"
+                         for k in CURVE_ARMS2) + " \\\\")
+    write_tex(tex_dir, f"batch6_followup2_{ds}_opcurve.tex", rows,
+              f"{stamp}Batch 6 follow-up 2 (B2) on {ds}: F1@2 minus the L3 "
+              f"vote-sum curve's F1@2 at matched ratio@2. Columns: judge, "
+              f"in-sample best L3 re-threshold F1@2 (t), {GRID_REF_NOTE} "
+              f"($\\dagger$ = below the L3 best), then "
+              f"{', '.join(esc(k) for k in CURVE_ARMS2)}.")
+    rows = []
+    for r in ok:
+        sr = r["fold_seed_robustness"]
+        for key, t in sr["table"].items():
+            vals = (" & ".join(t["signs"]) if key.startswith("curve") else
+                    " & ".join(_t(v, sign=True) for v in t["values"]))
+            rows.append(f"{esc(r['model'])} & {esc(key)} & {vals} & "
+                        f"{t['flips']} & {t['hard_flips']} \\\\")
+    write_tex(tex_dir, f"batch6_followup2_{ds}_seeds.tex", rows,
+              f"{stamp}Batch 6 follow-up 2 (S) on {ds}: point estimates by "
+              f"fold seed {meta['fold_seeds']} (first = primary). Columns: "
+              f"judge, metric, one value per seed, flips vs the primary seed "
+              f"(tie band TIE\\_F1 / TIE\\_RATIO), hard flips (+ vs -).")
+    rows = []
+    for r in ok:
+        e6 = r.get("e6_prime")
+        if not e6:
+            continue
+        for q, row in e6["sizes"].items():
+            if "skipped" in row:
+                continue
+            for nm in ("REFIT", "F1REFIT"):
+                st = row[nm]
+                if not st.get("n"):
+                    continue
+                rows.append(
+                    f"{esc(r['model'])} & {'kappa' if nm == 'REFIT' else 'F1'} &"
+                    f" {q} & {e6['caveats']['q_over_n_queries'][q]:.2f} & "
+                    f"{_t(st['mean'], sign=True)} & {_t(st['median'], sign=True)}"
+                    f" & {st['frac_catastrophic']:.3f} & "
+                    f"{st['raw_fallback_rate']:.3f} \\\\")
+    write_tex(tex_dir, f"batch6_followup2_{ds}_e6p.tex", rows,
+              f"{stamp}Batch 6 follow-up 2 (E) on {ds}: E6' with the RAW-"
+              f"fallback rate. Columns: judge, objective, q, q/n\\_queries "
+              f"(expected overlap of two calibration draws), mean and median "
+              f"dF1@2, fraction < {CATASTROPHIC_DF1}, share of draws whose "
+              f"fitted rule is RAW. q is confounded with pairs per query.")
+    payload = {"meta": {**meta, "dataset": ds, "header": header},
+               "rethresh_tally": rethresh_tally(results),
+               "judges": {r["model"]: {k: v for k, v in r.items()
+                                       if k != "opcurve_rows"}
+                          for r in results}}
+    path = der / f"batch6_followup2_{ds}.json"
+    path.write_text(json.dumps(_jclean(payload), indent=2, ensure_ascii=False,
+                               allow_nan=False), encoding="utf-8")
+    print(f"[json] wrote {path}")
+
+
+def followup2_datasets(df, qrels, rules_all, datasets, judges, flagships,
+                       data_dir, B, nested_b, seed, fold_seeds, e6p_sizes,
+                       e6p_B, check_labels: bool = True) -> dict:
+    out: dict = {}
+    frozen_pairs: dict = {}
+    for ds in datasets:
+        stored = None
+        if check_labels:
+            stored, sp = load_stored_labels(data_dir, ds)
+            if stored is None:
+                print(f"[labels] WARNING: {sp} not found — cannot verify the "
+                      f"universe equals `run`'s.", file=sys.stderr)
+        res_ds = []
+        for model in judges:
+            d, restricted = scope_rows(df, model, ds, flagships, data_dir,
+                                       frozen_pairs)
+            rule = frozen_rule(rules_all, model, ds) if not d.empty else None
+            if d.empty or rule is None:
+                res_ds.append({"model": model, "dataset": ds, "info": {},
+                               "error": (f"no {ds} rows" if d.empty else
+                                         f"no frozen {FAMILY_OF[ds]} rule")})
+                continue
+            cell = prepare_cell(model, ds, d, qrels, seed)
+            cell["info"]["flagship"] = restricted
+            if "error" in cell:
+                res_ds.append({"model": model, "dataset": ds,
+                               "info": cell["info"], "error": cell["error"]})
+                continue
+            res_ds.append(followup2_cell(cell, rule, B, nested_b, seed,
+                                         fold_seeds, e6p_sizes, e6p_B, stored))
+        out[ds] = res_ds
+    return out
+
+
+def followup2_gate(datasets, unseal: bool, path: Path | None = None) -> None:
+    """dl22: --unseal-dl22 (src.qrels seal) AND the B6 registration heading in
+    paper/PREDICTIONS.md.  Checked before any data is loaded."""
+    assert_not_sealed(datasets, unseal=unseal)
+    if "dl22" in datasets and not has_registration(path):
+        sys.exit("ERROR (dl22 gate): followup2 on dl22 requires the B6 "
+                 f"registration heading ('{B6_MARKER}') in "
+                 "paper/PREDICTIONS.md.")
+
+
+def cmd_followup2(args) -> None:
+    import time
+    t0 = time.time()
+    datasets = resolve_datasets(args.datasets)
+    followup2_gate(datasets, args.unseal_dl22)               # BEFORE data
+    data_dir = resolve_data_dir(args.data_dir)
+    rules_all, rules_path, sha = load_rules(data_dir, args.rules)
+    fold_seeds = _fold_seeds(args.fold_seeds)
+    if args.nested_b < 0:
+        sys.exit("ERROR: --nested-b must be >= 0.")
+    jpath = Path(args.judgments) if args.judgments else \
+        data_dir / "derived" / "judgments.parquet"
+    df = load_judgments(jpath)
+    df = df[df.dataset.astype(str).isin(datasets)]
+    qrels = load_human(datasets, args.qrels_json)
+    judges, flagships = _judges(args.judges), _flagships(args.flagships)
+    qsizes = [int(x) for x in args.q_sizes.split(",") if x.strip()]
+    meta = {"script": "scripts/batch6_poolext.py followup2",
+            "status": EXPLORATORY, "exploratory": True,
+            "pre_registered": False, "git_hash": git_hash(),
+            "code_dirty": code_dirty(), "rules_path": str(rules_path),
+            "rules_sha256": sha, "B": args.b, "nested_b": args.nested_b,
+            "nested_tail": nested_tail_note(args.nested_b),
+            "seed": args.seed, "fold_seeds": fold_seeds,
+            "fold_seed": fold_seeds[0], "ci": "90% percentile",
+            "e6p_B": args.e6p_b, "e6p_q_sizes": qsizes,
+            "catastrophic_dF1": CATASTROPHIC_DF1, "tie_f1": TIE_F1,
+            "tie_ratio": TIE_RATIO, "rethresh_note": RT_NOTE,
+            "grid_note": GRID_REF_NOTE,
+            "qrels_source": args.qrels_json or "src.qrels",
+            "timestamp_utc": datetime.datetime.now(datetime.timezone.utc)
+            .isoformat(timespec="seconds")}
+    res = followup2_datasets(df, qrels, rules_all, datasets, judges, flagships,
+                             data_dir, args.b, args.nested_b, args.seed,
+                             fold_seeds, qsizes, args.e6p_b)
+    report_followup2(res, datasets, meta)
+    if not any("error" not in r for ds in datasets for r in res[ds]):
+        sys.exit("\nERROR: no (judge, dataset) cell produced a result.")
+    print()
+    header = followup2_header(res, datasets, meta)
+    for ds in datasets:
+        write_followup2(res[ds], ds, data_dir, meta, header)
+    print(f"\n[{EXPLORATORY}] done in {time.time() - t0:.1f}s")
+
+
+def report_followup2(res: dict, datasets, meta: dict) -> None:
+    header = followup2_header(res, datasets, meta)
+    print_followup2_header(header, meta)
+    for ds in datasets:
+        print_dataset_header2(ds, res[ds], meta)
+        for r in res[ds]:
+            print_followup2(r)
+        if any("error" not in r for r in res[ds]):
+            print()
+            print_rethresh_tally(rethresh_tally(res[ds]), f"[{ds}]")
+    allr = [r for ds in datasets for r in res[ds]]
+    if len(datasets) > 1 and any("error" not in r for r in allr):
+        print()
+        print_rethresh_tally(rethresh_tally(allr), "[all datasets]")
+    flips = [(r["dataset"], r["model"], k, t["flips"], t["hard_flips"])
+             for r in allr if "error" not in r
+             for k, t in r["fold_seed_robustness"]["table"].items()]
+    if len(meta["fold_seeds"]) > 1 and flips:
+        print(f"  fold-seed flips (seeds {meta['fold_seeds']}): "
+              f"{sum(1 for f in flips if f[3])} of {len(flips)} cell-metrics "
+              f"change sign/verdict vs seed {meta['fold_seeds'][0]} on some "
+              f"seed; {sum(1 for f in flips if f[4])} flip hard (+ vs -).")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # selftest — synthetic stub, offline
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -3356,6 +4330,297 @@ def selftest_followup(check, df, qrels, rules, root: Path, R: dict) -> None:
     except SystemExit as e:
         check("follow-up: dl22 refused without --unseal-dl22",
               "SEALED" in str(e.code))
+    return F
+
+
+def selftest_followup2(check, df, qrels, rules, root: Path, F: dict) -> None:
+    """followup2 (EXPLORATORY): every new code path on the stub, plus the
+    shared sections == `followup` (F) bit-exactly."""
+    import contextlib
+    import io
+    import time
+    from sklearn.metrics import cohen_kappa_score
+    print("\n  -- follow-up 2 subcommand (EXPLORATORY) --")
+    t0 = time.time()
+    out = root / "out"
+    df2 = pd.concat([df, _noisy_stub(qrels)], ignore_index=True)
+    rules2 = json.loads(json.dumps(rules))
+    rules2["rules"]["stub/noisy"] = {"msmarco": {
+        "dial_level": 3, "monotone_map": [0, 0, 1, 2],
+        "datasets": ["dl19", "dl20", "dl21"], "delta_hat": 0.9}}
+    judges = list(STUB_JUDGES) + ["stub/noisy"]
+    flag = frozenset({"stub/flag"})
+    seeds = (FOLD_SEEDS[0], FOLD_SEEDS[1])
+    fu = followup2_datasets(df2, qrels, rules2, ["dl21", "antique"], judges,
+                            flag, out, 200, 60, SEED, seeds, E6P_SIZES, 150)
+    G = {(r["model"], r["dataset"]): r for ds in fu for r in fu[ds]
+         if "error" not in r}
+    print(f"  ({len(G)} follow-up-2 cells in {time.time() - t0:.1f}s; RETHRESH "
+          f"points / eval-only CIs == followup's arms, nested replicates == "
+          f"nested_bootstrap, primary-seed robustness row == primary analysis "
+          f"— asserted inside followup2_cell)")
+    check("followup2: same cells as followup", set(G) == set(F), f"{len(G)}")
+
+    # shared sections are followup's, unchanged
+    bad = []
+    for k, r in G.items():
+        f = F[k]
+        for sec in ("factorial", "coincidences", "stored_labels_check"):
+            if json.dumps(_jclean(r[sec])) != json.dumps(_jclean(f[sec])):
+                bad.append((k, sec))
+        a, b = dict(r["f1_refit"]), dict(f["f1_refit"])
+        if json.dumps(_jclean(a)) != json.dumps(_jclean(b)):
+            bad.append((k, "f1_refit (incl. nested)"))
+        oa = {x: y for x, y in r["opcurve"].items() if x != "grid_best_insample"}
+        ob = {x: y for x, y in f["opcurve"].items() if x != "grid_ceiling"}
+        if json.dumps(_jclean(oa)) != json.dumps(_jclean(ob)):
+            bad.append((k, "opcurve"))
+        for q, row in f["e6_prime"]["sizes"].items():
+            r2 = r["e6_prime"]["sizes"][q]
+            for nm in ("REFIT", "F1REFIT"):
+                if "skipped" in row:
+                    continue
+                x = {kk: vv for kk, vv in r2[nm].items()
+                     if kk not in ("raw_fallback_rate", "n_raw_fallback")}
+                if json.dumps(_jclean(x)) != json.dumps(_jclean(row[nm])):
+                    bad.append((k, f"e6p {q} {nm}"))
+    check("followup2: factorial / opcurve / F1-refit + nested / E6' == "
+          "followup bit-exactly (only additions + the grid rename)", not bad,
+          str(bad[:3]))
+    check("followup2: grid key renamed (grid_ceiling -> grid_best_insample, "
+          "'NOT an upper bound')",
+          all("grid_ceiling" not in r["opcurve"]
+              and r["opcurve"]["grid_best_insample"]["note"] == GRID_REF_NOTE
+              for r in G.values()))
+
+    # nested_bootstrap(return_reps=True) leaves the summary unchanged
+    cell_n = prepare_cell("stub/noisy", "dl21",
+                          scope_rows(df2, "stub/noisy", "dl21", flag, out,
+                                     {})[0], qrels, SEED)
+    fc_n = followup_cache(cell_n, FOLD_SEEDS[0])
+    a = nested_bootstrap(fc_n, 30, SEED)
+    b = nested_bootstrap(fc_n, 30, SEED, return_reps=True)
+    reps = b.pop("reps")
+    check("nested_bootstrap(return_reps=True): identical summary + "
+          "per-replicate weights / F1",
+          json.dumps(_jclean(a)) == json.dumps(_jclean(b))
+          and reps["Wq"].shape == (30, fc_n["nq"]) and reps["REFIT"].shape == (30,))
+
+    # (R) RETHRESH == brute force on explicit pair rows (sklearn kappa)
+    worst, kbad = [], 0.0
+    for key in (("stub/noisy", "dl21"), ("stub/lenient", "dl21"),
+                ("stub/strict", "antique"), ("stub/flag", "dl21")):
+        m_, ds_ = key
+        cell = prepare_cell(m_, ds_, scope_rows(df2, m_, ds_, flag, out, {})[0],
+                            qrels, SEED)
+        cell["info"]["flagship"] = m_ in flag
+        cnt3, h = cell["cnt"][2], cell["h"]
+        nrec, vsum = cnt3.sum(1), cnt3 @ np.arange(4)
+        K = G[key]["rethresh"]["K"]
+        t_raw = G[key]["rethresh"]["t_raw"]
+        pf = np.array([fold_of(ds_, q, FOLD_SEEDS[0]) for q in cell["pair_qid"]])
+        yt = (h >= 2).astype(int)
+        order = [t_raw] + [t for t in range(1, 3 * K + 1) if t != t_raw]
+        for nm in RT_ARMS:
+            lab = np.zeros(len(h), dtype=int)
+            for k in (0, 1):
+                tr = pf != k
+                best, bt = -np.inf, None
+                for t in order:
+                    yp = (vsum[tr] * K >= t * nrec[tr]).astype(int)
+                    if nm == "RETHRESH_K":
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            sc = cohen_kappa_score(yt[tr], yp)
+                        Ns = tr.sum()
+                        mine = _bin_kappa((yt[tr] & yp).sum(), yp.sum(),
+                                          yt[tr].sum(), Ns)
+                        if np.isfinite(sc) and np.isfinite(mine):
+                            kbad = max(kbad, abs(float(sc) - float(mine)))
+                    else:
+                        den = yp.sum() + yt[tr].sum()
+                        sc = 2 * (yt[tr] & yp).sum() / den if den else np.nan
+                    if np.isfinite(sc) and sc > best:
+                        best, bt = sc, t
+                bt = t_raw if bt is None else bt
+                got = G[key]["rethresh"]["arms"][nm]["folds"][k]["t"]
+                if got != bt:
+                    worst.append((key, nm, k, bt, got))
+                te = pf == k
+                lab[te] = (vsum[te] * K >= bt * nrec[te]).astype(int)
+            f1 = 2 * (yt & lab).sum() / (yt.sum() + lab.sum())
+            if abs(f1 - G[key]["rethresh"]["arms"][nm]["point"]["F1@2"]) > 1e-12:
+                worst.append((key, nm, "F1", f1))
+    check("RETHRESH: fold t (ties -> RAW t, then lower t) and held-out F1@2 == "
+          "brute force on explicit pair rows (4 cells x 2 objectives)",
+          not worst, str(worst[:3]))
+    check("RETHRESH: binary kappa == sklearn cohen_kappa_score", kbad < 1e-12,
+          f"max |diff| {kbad:.1e}")
+    rc_fake = {"tp": np.array([[5.0], [5.0], [5.0], [5.0]]),
+               "lr": np.array([[10.0], [10.0], [10.0], [10.0]]),
+               "pref": np.array([2, 0, 1, 3]), "t_raw": 3,
+               "ts": np.arange(1, 5)}
+    fc_fake = {"hr": np.array([10.0]), "ppq": np.array([30.0])}
+    j_all, _ = rt_pick(rc_fake, fc_fake, np.ones((1, 1)), "F1")
+    rc_fake2 = dict(rc_fake, tp=np.array([[6.0], [5.0], [5.0], [6.0]]))
+    j_low, _ = rt_pick(rc_fake2, fc_fake, np.ones((1, 1)), "F1")
+    check("RETHRESH tie-break: all tied -> RAW t; tie not incl. RAW -> lower t",
+          int(j_all[0]) == 2 and int(j_low[0]) == 0,
+          f"{int(j_all[0]) + 1}, {int(j_low[0]) + 1}")
+    bad = [(k, c) for k, r in G.items()
+           for c, v in r["rethresh"]["contrasts"].items()
+           if v["nested_ci90"] is None or v["nested_ci90"][2] != 60
+           or v["verdict"] not in ("beats", "within", "below")]
+    check("RETHRESH: every contrast has eval-only + nested (60/60 replicates) "
+          "CIs and a verdict", not bad, str(bad[:3]))
+    rl = G[("stub/lenient", "dl21")]["rethresh"]
+    check("RETHRESH: lenient stub re-thresholds away from RAW t (both "
+          "objectives) and recovers most of the F1",
+          all(f["t"] > rl["t_raw"] for nm in RT_ARMS
+              for f in rl["arms"][nm]["folds"])
+          and rl["contrasts"]["RETHRESH_K-RAW"]["point"] > 0.2,
+          str({nm: [f["t"] for f in rl["arms"][nm]["folds"]] for nm in RT_ARMS}))
+
+    # (B2) curve verdicts incl. FROZEN:DIAL / FROZEN:MAP; grid flag
+    o_l = G[("stub/lenient", "dl21")]["opcurve2"]["points"]
+    o_f = G[("stub/flag", "dl21")]["opcurve2"]["points"]
+    check("curve: FROZEN:DIAL/MAP verdicts — lenient (L3/0012): DIAL==RAW, "
+          "MAP==FROZEN; flagship (L1/id): MAP==RAW, DIAL==FROZEN",
+          o_l["FROZEN:DIAL"] == o_l["RAW"] and o_l["FROZEN:MAP"] == o_l["FROZEN"]
+          and o_f["FROZEN:MAP"] == o_f["RAW"] and o_f["FROZEN:DIAL"] == o_f["FROZEN"]
+          and all(set(CURVE_ARMS2) == set(r["opcurve2"]["points"])
+                  for r in G.values()))
+    check("curve: grid_below_l3_best flag == (grid F1 < L3-best F1)",
+          all(r["opcurve2"]["grid_below_l3_best"]
+              == (r["opcurve2"]["grid_best_insample"]["F1@2"]
+                  < r["opcurve2"]["l3_best_insample"]["F1@2"] - 1e-12)
+              for r in G.values()))
+    fake = {"l3_best_insample": {"t": 12, "F1@2": 0.74, "ratio@2": 1.1},
+            "grid_best_insample": {"combo": "L3/0123", "F1@2": 0.73,
+                                   "ratio@2": 1.0},
+            "grid_below_l3_best": True, "grid_minus_l3_best": -0.01,
+            "grid_exceeded_by": ["REFIT"]}
+    gl = "\n".join(_grid_lines(fake))
+    check("curve: printed grid reference renamed and both flags printed",
+          "NOT an upper bound" in gl and "ceiling:" not in gl
+          and "BELOW the in-sample best L3" in gl and "exceeded by REFIT" in gl)
+
+    # (S) fold-seed robustness
+    bad = []
+    for k, r in G.items():
+        sr = r["fold_seed_robustness"]
+        if sr["seeds"] != list(seeds) or len(sr["table"]) != 19:
+            bad.append((k, "shape"))
+            continue
+        ok_s = sr["ok_seeds"]
+        for key, t in sr["table"].items():
+            if len(t["values"]) != len(ok_s) or not isinstance(t["flips"], int):
+                bad.append((k, key))
+        if len(ok_s) < 2:
+            continue
+        # the robustness seed's REFIT == batch-4 crossfit labels at that seed
+        hh = prepare_cell(k[0], k[1], scope_rows(df2, k[0], k[1], flag, out,
+                                                 {})[0], qrels, SEED)
+        lab, _rr, _pf, _w = crossfit(hh, int(ok_s[1]))
+        e = endpoints(np.bincount(hh["h"] * 4 + lab, minlength=16)
+                      .reshape(4, 4))
+        raw = endpoints(np.bincount(
+            hh["h"] * 4 + labels_from_counts(hh["cnt"][2], IDENTITY_MAP),
+            minlength=16).reshape(4, 4))
+        v = sr["per_seed"][ok_s[1]]["dF1@2"]["REFIT-RAW"]
+        if abs(v - float(e["F1@2"] - raw["F1@2"])) > 1e-12:
+            bad.append((k, ok_s[1], v))
+    check("fold-seed robustness: 19 metrics x seeds (42, 43), flips counted; "
+          "seed-43 REFIT-RAW == batch-4 crossfit labels", not bad, str(bad[:3]))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        report_followup2(fu, ["dl21", "antique"],
+                         {"git_hash": "stub", "code_dirty": None,
+                          "rules_sha256": "0" * 64, "fold_seeds": list(seeds),
+                          "B": 200, "nested_b": 60, "e6p_B": 150,
+                          "e6p_q_sizes": list(E6P_SIZES)})
+    txt = buf.getvalue()
+    check("report: header caveats (multiplicity, in-sample, subsample, E6' "
+          "confounding/finite population), RETHRESH 2-line tally, seed table, "
+          "nested-tail warning",
+          "MULTIPLICITY / NON-INDEPENDENCE" in txt
+          and "no multiplicity correction" in txt
+          and "PARTIALLY IN-SAMPLE" in txt and "FULLY IN-SAMPLE" in txt
+          and "SUBSAMPLE: stub/flag" in txt
+          and "confounded with pairs-per-query" in txt and "HEAVY" in txt
+          and txt.count("kappa-objective: REFIT vs RETHRESH_K") == 3
+          and txt.count("F1-objective:    F1REFIT vs RETHRESH_F1") == 3
+          and "(S) FOLD-SEED ROBUSTNESS" in txt and "fold-seed flips" in txt
+          and "3 replicates per 5% tail" in txt and "WARNING: < 50" in txt
+          and "in-sample best-of-grid F1 ceiling" not in txt
+          and "L3 threshold-curve best" not in txt
+          and txt.count("NOT an upper bound") >= len(G)
+          and "(B2) OPERATING-CURVE VERDICTS" in txt
+          and "FROZEN:DIAL" in txt and "RAW-FALLBACK" in txt)
+
+    # (E) RAW-fallback rate
+    bad = []
+    for k, r in G.items():
+        for q, row in r["e6_prime"]["sizes"].items():
+            if "skipped" in row:
+                continue
+            for nm in ("REFIT", "F1REFIT"):
+                st = row[nm]
+                rate = st.get("raw_fallback_rate")
+                if st.get("n") and (rate is None or not 0 <= rate <= 1
+                                    or abs(rate * st["n"] - st["n_raw_fallback"])
+                                    > 1e-9):
+                    bad.append((k, q, nm))
+    fb = G[("stub/noop", "dl21")]["e6_prime"]["sizes"]["8"]["REFIT"]
+    fl = G[("stub/lenient", "dl21")]["e6_prime"]["sizes"]["8"]["REFIT"]
+    check("E6' RAW-fallback: rate in [0,1] == n_raw_fallback/n everywhere; "
+          "calibrated (noop) stub falls back more often than lenient",
+          not bad and fb["raw_fallback_rate"] > fl["raw_fallback_rate"],
+          f"noop {fb['raw_fallback_rate']:.3f} vs lenient "
+          f"{fl['raw_fallback_rate']:.3f}; violations {bad[:2]}")
+
+    # writers + gate
+    meta = {"status": EXPLORATORY, "exploratory": True, "pre_registered": False,
+            "B": 200, "nested_b": 60, "seed": SEED, "fold_seeds": list(seeds),
+            "fold_seed": seeds[0], "e6p_B": 150}
+    hdr = followup2_header(fu, ["dl21", "antique"], meta)
+    with contextlib.redirect_stdout(io.StringIO()):
+        write_followup2(fu["dl21"], "dl21", out, meta, hdr)
+    js = json.loads((out / "derived" / "batch6_followup2_dl21.json").read_text())
+    texs = sorted((out / "derived" / "tex").glob("batch6_followup2_dl21_*.tex"))
+    check("followup2 writers: JSON (EXPLORATORY meta, RETHRESH tally, seed "
+          "table), 4 tex tables with the EXPLORATORY stamp",
+          js["meta"]["status"] == EXPLORATORY
+          and js["meta"]["pre_registered"] is False
+          and js["meta"]["header"]["n_cells"] == len(G)
+          and "REFIT-RETHRESH_K" in js["rethresh_tally"]
+          and "fold_seed_robustness" in js["judges"]["stub/noisy"]
+          and len(texs) == 4
+          and all(t.read_text().startswith(f"% [{EXPLORATORY}]") for t in texs),
+          f"{[t.name for t in texs]}")
+    nomark = root / "PRED_nomark.md"
+    mark = root / "PRED_mark.md"
+    outcome = []
+    for dsl, unseal, path in ((["dl22"], False, mark), (["dl22"], True, nomark),
+                              (["dl22"], True, mark), (["dl21"], False, nomark)):
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                followup2_gate(dsl, unseal, path)
+            outcome.append("pass")
+        except SystemExit as e:
+            outcome.append("SEALED" if "SEALED" in str(e.code) else "heading"
+                           if B6_MARKER in str(e.code) else "other")
+    check("followup2 gate: dl22 needs --unseal-dl22 AND the B6 heading; "
+          "dl21 needs neither",
+          outcome == ["SEALED", "heading", "pass", "pass"], str(outcome))
+    ns = argparse.Namespace(datasets="dl22", unseal_dl22=False,
+                            data_dir=str(root / "nowhere"))
+    try:
+        cmd_followup2(ns)
+        check("followup2: dl22 refused without --unseal-dl22 (CLI path)", False)
+    except SystemExit as e:
+        check("followup2: dl22 refused without --unseal-dl22 (CLI path)",
+              "SEALED" in str(e.code))
 
 
 def cmd_selftest(args) -> None:
@@ -3692,7 +4957,10 @@ def cmd_selftest(args) -> None:
               f"{0 if lab_df is None else len(lab_df)} rows")
 
         # 13. follow-up subcommand (exploratory)
-        selftest_followup(check, df, qrels, rules, root, R)
+        F_fu = selftest_followup(check, df, qrels, rules, root, R)
+
+        # 14. follow-up 2 subcommand (exploratory)
+        selftest_followup2(check, df, qrels, rules, root, F_fu)
 
     if args.keep_dir:
         kd = Path(args.keep_dir)
@@ -3786,6 +5054,32 @@ def main() -> None:
     p.add_argument("--q-sizes", default=",".join(map(str, E6P_SIZES)),
                    help="E6' calibration query counts ('' = skip E6')")
     p.set_defaults(func=cmd_followup)
+
+    p = sub.add_parser("followup2", help=f"{EXPLORATORY}: evaluator re-run "
+                       "requests — RETHRESH baseline, FROZEN dial/map curve "
+                       "verdicts, fold-seed robustness, E6' RAW-fallback")
+    common(p, "dl21,antique")
+    data_opts(p)
+    for act in p._actions:
+        if act.dest == "fold_seeds":
+            act.default = ",".join(map(str, FU2_FOLD_SEEDS))
+            act.help = ("cross-fit fold seeds; the FIRST is primary (eval-only "
+                        "+ nested CIs), the rest give point-estimate "
+                        "robustness tables (default: 42 only; e.g. "
+                        "42,43,44,45,46)")
+    p.add_argument("--unseal-dl22", action="store_true",
+                   help="required for dl22 (sealed holdout); dl22 also needs "
+                        "the B6 registration heading in paper/PREDICTIONS.md")
+    p.add_argument("--b", type=int, default=B_BOOT,
+                   help="evaluation-only query-bootstrap replicates")
+    p.add_argument("--nested-b", type=int, default=NESTED_B,
+                   help="nested (fit-aware) bootstrap replicates; 0 = skip; "
+                        "use 1000 for borderline cells")
+    p.add_argument("--e6p-b", type=int, default=E6P_B,
+                   help="E6' draws per calibration-query count")
+    p.add_argument("--q-sizes", default=",".join(map(str, E6P_SIZES)),
+                   help="E6' calibration query counts ('' = skip E6')")
+    p.set_defaults(func=cmd_followup2)
 
     p = sub.add_parser("selftest", help="synthetic stub drive (offline)")
     p.add_argument("--keep-dir", default=None,
