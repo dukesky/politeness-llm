@@ -162,13 +162,49 @@ def load_compares(root: Path) -> dict:
     return out
 
 
+def write_csvs(d: Path, ev: dict, cmp_: dict) -> None:
+    import csv
+    d.mkdir(parents=True, exist_ok=True)
+    with (d / "b7_sets.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["arm", "judge", "set", "n_seeds", "n_pairs", "n_queries"]
+                   + [f"{k}_{x}" for k in SHOW for x in ("mean", "sd")]
+                   + [f"{k}_ci_lo_s1" for k in SHOW] + [f"{k}_ci_hi_s1" for k in SHOW])
+        for arm, judges in ev.items():
+            for slug, sets in judges.items():
+                for s_, rs in sets.items():
+                    r0 = rs[min(rs)]
+                    row = [arm, slug, s_, len(rs), r0["n_pairs"], r0["n_queries"]]
+                    for k in SHOW:
+                        m, sd, _n = seed_mean(rs, k)
+                        row += [f"{m:.6f}", f"{sd:.6f}"]
+                    row += [f"{r0['ci90'][k][0]:.6f}" for k in SHOW]
+                    row += [f"{r0['ci90'][k][1]:.6f}" for k in SHOW]
+                    w.writerow(row)
+    with (d / "b7_compares.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["arm", "judge", "compare", "endpoint", "a", "b", "diff", "ci_lo", "ci_hi", "tost_ndcg10"])
+        for arm, judges in cmp_.items():
+            for slug, cs in judges.items():
+                for name, r in cs.items():
+                    for k, e in r["endpoints"].items():
+                        w.writerow([arm, slug, name, k, f"{e['a']:.6f}", f"{e['b']:.6f}", f"{e['diff']:.6f}",
+                                    f"{e['ci90'][0]:.6f}", f"{e['ci90'][1]:.6f}",
+                                    r["tost_ndcg10"]["statement"].replace("\n", " ")])
+    print(f"  csv -> {d / 'b7_sets.csv'}, {d / 'b7_compares.csv'}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--eval-root", required=True)
+    ap.add_argument("--csv-dir", default=None,
+                    help="also write b7_sets.csv / b7_compares.csv here (for the paper table builder)")
     args = ap.parse_args()
     root = Path(args.eval_root)
     ev = load_evals(root)
     cmp_ = load_compares(root)
+    if args.csv_dir:
+        write_csvs(Path(args.csv_dir), ev, cmp_)
     n_files = sum(len(ss) for a in ev.values() for sl in a.values() for ss in sl.values())
     print(f"BATCH 7 SUMMARY  eval files {n_files}  arms {sorted(ev)}")
     print("FRAMING: operating-point artifact removal against THESE annotators; "
