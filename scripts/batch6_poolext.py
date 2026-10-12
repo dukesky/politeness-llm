@@ -90,12 +90,39 @@ No-op invariant: for any judge whose frozen rule is dial=L3 + identity map,
 CORR-FROZEN must equal RAW BIT-EXACTLY on every endpoint, CI and paired
 difference; otherwise the script exits before writing anything.
 
+Follow-up (``followup``; EXPLORATORY — not pre-registered)
+---------------------------------------------------------
+Evaluator follow-up on the SAME universe as ``run`` (recomputed from the
+judgments and hard-checked against derived/batch6_labels_<ds>), fold seed =
+first --fold-seeds (42).  No registration gate; dl22 still needs
+--unseal-dl22.  All fits/evaluations use per-query sufficient statistics, so
+bootstrap and sub-sampling replicates are matrix products.
+  (A) 2x2 factorial dial {L3, chosen} x map {identity, chosen} for FROZEN
+      (frozen choices) and REFIT (per-fold cross-fit choices; the MAP arm
+      applies the map fitted at the fitted dial) + a supplementary MAP@L3
+      arm (map refitted at L3).  Attribution: dial = DIAL-RAW, map = MAP-RAW,
+      interaction = (FULL-DIAL)-(MAP-RAW); eval-only query-bootstrap CIs.
+  (B) operating curve: L3 vote sum v = K*mean (K = modal L3 records/pair),
+      positive iff v >= t, t = 1..3K; overlaid with the in-sample
+      (L1..L5) x 35-map grid; FROZEN / REFIT / F1-REFIT compared with the
+      curve's F1@2 at matched ratio@2 (interpolated in (n_pos, TP)).
+  (C) F1-objective refit: cross-fit grid argmax of train pair-label F1@2
+      (ties -> train pair-label kappa -> RAW-first order); eval-only CIs plus
+      a NESTED bootstrap (cross-fit redone in each query-resampled replicate)
+      for fit-aware CIs of dF1@2 vs RAW, both objectives.
+  (E) E6': calibrate on q whole queries (q in 2,4,8,16,32; simple random
+      sample, B=1000), evaluate dF1@2 (REFIT-RAW) on the remaining queries:
+      mean, median, fraction < -0.05; ">=80% of the q=32 gain by q=8" stated
+      only if the q=32 mean gain > TIE_F1.
+
 Subcommands
 -----------
     paste     --datasets dl22,dl21,antique
     validate  --datasets dl21,antique          (counts only, no agreement)
     run       --datasets dl21,antique [--sample-efficiency] [--non-blind]
     run       --datasets dl22 --unseal-dl22
+    followup  --datasets dl22,dl21,antique --unseal-dl22 [--judges ...]
+              [--b 1000] [--nested-b 200] [--seed 42] [--e6p-b 1000]
     selftest  [--keep-dir DIR]
 
 Outputs (under DATA_DIR — this repo carries no data artefacts):
@@ -103,6 +130,11 @@ Outputs (under DATA_DIR — this repo carries no data artefacts):
     $DATA_DIR/derived/batch6_labels_<ds>.parquet   (.pkl if no parquet engine)
     $DATA_DIR/derived/tex/batch6_poolext_<ds>.tex
     $DATA_DIR/derived/tex/batch6_poolext_<ds>_sampleff.tex  (--sample-efficiency)
+  followup:
+    $DATA_DIR/derived/batch6_followup_<ds>.json
+    $DATA_DIR/derived/batch6_opcurve_<ds>_<judge_slug>.csv
+    $DATA_DIR/derived/tex/batch6_followup_<ds>_{factorial,attrib,opcurve,
+                                               f1refit,e6p}.tex
 """
 
 from __future__ import annotations
@@ -130,6 +162,8 @@ from batch1r_stats import esc, kappa_from_cm, write_tex  # noqa: E402
 from batch4_correction import (  # noqa: E402
     IDENTITY_MAP,
     LEVELS,
+    MIN_N_KAPPA,
+    MONOTONE_MAPS,
     best_level,
     delta_D,
     fit_monotone_map,
@@ -1901,6 +1935,1060 @@ def cmd_paste(args) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# followup — EXPLORATORY evaluator follow-up (not pre-registered)
+#   (A) 2x2 dial x map factorial      (B) operating curve vs the (dial,map) grid
+#   (C) F1-objective refit + nested (fit-aware) bootstrap
+#   (E) E6' sample efficiency in calibration QUERIES
+# ═══════════════════════════════════════════════════════════════════════════
+
+EXPLORATORY = "EXPLORATORY — not pre-registered"
+NESTED_B = 200
+E6P_SIZES = (2, 4, 8, 16, 32)
+E6P_B = 1000
+E6P_LO, E6P_HI, E6P_FRAC = 8, 32, 0.8
+CATASTROPHIC_DF1 = -0.05
+FX_EPS = ("ratio@2", "absdev@2", "P@2", "R@2", "F1@2", "MAE", "delta_cont")
+FX_ARMS = ("RAW", "DIAL", "MAP", "FULL")
+KAPPA_CHUNK = 200
+
+NMAP = len(MONOTONE_MAPS)
+MAP_INDEX = {tuple(int(x) for x in m): i for i, m in enumerate(MONOTONE_MAPS)}
+MAP_ID_IDX = MAP_INDEX[IDENTITY_MAP]
+# combo c = (dial - 1) * NMAP + map index — the full (L1..L5) x 35-map grid
+COMBOS = [(int(l), tuple(int(x) for x in m)) for l in LEVELS
+          for m in MONOTONE_MAPS]
+COMBO_DIAL = np.array([c[0] for c in COMBOS], dtype=np.int64)
+_MAPM = np.zeros((NMAP, 4, 4))
+for _i, _m in enumerate(MONOTONE_MAPS):
+    _MAPM[_i, np.arange(4), list(_m)] = 1.0
+# F1-objective tie-break order (after F1, then pair-label kappa): RAW first,
+# then dials by distance to L3 (L2, L4, L1, L5), identity map first.
+_DIAL_PREF = (3, 2, 4, 1, 5)
+_MAP_PREF = [MAP_ID_IDX] + [i for i in range(NMAP) if i != MAP_ID_IDX]
+PREF_ORDER = np.array([(l - 1) * NMAP + mi for l in _DIAL_PREF
+                       for mi in _MAP_PREF], dtype=np.int64)
+
+
+def combo_of(dial, mono) -> int:
+    return (int(dial) - 1) * NMAP + MAP_INDEX[tuple(int(x) for x in mono)]
+
+
+RAW_C = combo_of(3, IDENTITY_MAP)
+
+
+def combo_name(c: int) -> str:
+    l, m = COMBOS[int(c)]
+    return f"L{l}/{''.join(map(str, m))}"
+
+
+def judge_slug(model: str) -> str:
+    return re.sub(r"[^A-Za-z0-9.\-]+", "_", model).strip("_")
+
+
+def _ci90(x) -> list:
+    x = np.asarray(x, dtype=float)
+    f = x[np.isfinite(x)]
+    if f.size == 0:
+        return [None, None, 0]
+    return [float(np.percentile(f, CI_LO)), float(np.percentile(f, CI_HI)),
+            int(f.size)]
+
+
+def kappa_vec(cm) -> np.ndarray:
+    """Linear-weighted kappa over the trailing 4x4 axes (kappa_from_cm math)."""
+    cm = np.asarray(cm, dtype=float)
+    tot = cm.sum(axis=(-2, -1))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        o = cm / tot[..., None, None]
+        e = o.sum(axis=-1)[..., :, None] * o.sum(axis=-2)[..., None, :]
+        po = (_W * o).sum(axis=(-2, -1))
+        pe = (_W * e).sum(axis=(-2, -1))
+        k = 1.0 - po / pe
+    return np.where((tot > 0) & (pe != 0) & np.isfinite(pe), k, np.nan)
+
+
+def followup_cache(cell: dict, fold_seed: int) -> dict:
+    """Per-QUERY sufficient statistics: every fit / evaluation below is a
+    weighted sum over queries, so bootstrap and sub-sampling replicates are
+    matrix products (query multiplicities as weights) instead of row loops."""
+    P, cnt, h = cell["P"], cell["cnt"], cell["h"]
+    nq, pair_q, nP = cell["n_queries"], cell["pair_q"], len(cell["h"])
+    row_q = pair_q[cell["row_u_P"]]
+    qname = np.empty(nq, dtype=object)
+    qname[pair_q] = np.asarray(cell["pair_qid"], dtype=object)
+    qfold = np.array([fold_of(cell["dataset"], q, fold_seed) for q in qname],
+                     dtype=np.int64)
+    ok, lv = P.ok, P.lvl
+    # batch-4 delta_D inputs: human mean over ALL matched rows, score means
+    # over the scorable rows of each level
+    n_all = np.bincount(row_q, minlength=nq).astype(float)
+    h_all = np.bincount(row_q, weights=P.h.astype(float), minlength=nq)
+    nok = np.zeros((nq, len(LEVELS)))
+    ssum = np.zeros((nq, len(LEVELS)))
+    for i, l in enumerate(LEVELS):
+        m = ok & (lv == l)
+        nok[:, i] = np.bincount(row_q[m], minlength=nq)
+        ssum[:, i] = np.bincount(row_q[m], weights=P.s[m], minlength=nq)
+    # batch-4 level_kappas inputs: per-variant confusion on scorable rows
+    V = P.n_variants
+    keys = (((row_q[ok] * V + P.v[ok]) * 4 + P.h[ok]) * 4
+            + P.s[ok].astype(np.int64))
+    vcm = np.bincount(keys, minlength=nq * V * 16).reshape(nq, V, 4, 4)\
+        .astype(float)
+    vlevel = np.array([P.vlevel[v] for v in range(V)], dtype=np.int64)
+    # every grid combo: pair labels, per-query confusion, record-mean sums
+    C = len(COMBOS)
+    labs = np.empty((C, nP), dtype=np.int64)
+    ccm = np.empty((C, nq, 4, 4))
+    num = np.empty((C, nq))
+    for c, (l, m) in enumerate(COMBOS):
+        lab = labels_from_counts(cnt[l - 1], m)
+        labs[c] = lab
+        ccm[c] = cm_by_query(h, lab, pair_q, nq)
+        num[c] = np.bincount(pair_q, weights=cnt[l - 1] @ np.asarray(m, float),
+                             minlength=nq)
+    den = np.stack([np.bincount(pair_q, weights=cnt[l - 1].sum(1).astype(float),
+                                minlength=nq) for l in LEVELS])
+    return {
+        "nq": nq, "nP": nP, "pair_q": pair_q, "qfold": qfold, "qname": qname,
+        "n_all": n_all, "h_all": h_all, "nok": nok, "ssum": ssum,
+        "vcm": vcm, "vlevel": vlevel, "labs": labs, "ccm": ccm, "num": num,
+        "den": den,
+        "tp": ccm[:, :, 2:, 2:].sum(axis=(-2, -1)),
+        "lr": ccm[:, :, :, 2:].sum(axis=(-2, -1)),
+        "hr": np.bincount(pair_q, weights=(h >= 2).astype(float), minlength=nq),
+        "ppq": np.bincount(pair_q, minlength=nq).astype(float),
+        "row_q": row_q,
+        # flattened [nq, X*16] views: weighted sums over queries become one
+        # BLAS matmul (integer-valued floats, so exact in any order)
+        "vcm_flat": vcm.reshape(nq, V * 16),
+        "ccm_flat": ccm.transpose(1, 0, 2, 3).reshape(nq, C * 16),
+    }
+
+
+def fit_kappa_vec(fc: dict, Wt) -> tuple[np.ndarray, np.ndarray]:
+    """batch-4 fit_rule for many query-weight vectors at once.
+
+    dial = argmin_l |Delta + D(l)| (ties -> lower level, as best_level);
+    map  = first maximiser, in MONOTONE_MAPS order, of the paraphrase-mean
+    linear kappa at the dial over variants with n > MIN_N_KAPPA (identity if
+    none is finite), as fit_monotone_map.  Integer weights == duplicated rows.
+    Returns (combo index [B], ok [B]); ok=False where delta_D would be None.
+    """
+    Wt = np.atleast_2d(np.asarray(Wt, dtype=float))
+    B = Wt.shape[0]
+    N, H = Wt @ fc["n_all"], Wt @ fc["h_all"]
+    NOK, S = Wt @ fc["nok"], Wt @ fc["ssum"]
+    ok = (N > 0) & (NOK > 0).all(axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        means = S / NOK
+        delta = means[:, 2] - H / N
+        D = means - means[:, 2:3]
+        dist = np.abs(delta[:, None] + D)
+    dist = np.where(np.isfinite(dist), dist, np.inf)
+    dial = np.argmin(dist, axis=1) + 1
+    out = np.full(B, RAW_C, dtype=np.int64)
+    vl = fc["vlevel"]
+    for s0 in range(0, B, KAPPA_CHUNK):
+        sl = slice(s0, min(B, s0 + KAPPA_CHUNK))
+        VC = (Wt[sl] @ fc["vcm_flat"]).reshape(-1, fc["vcm"].shape[1], 4, 4)
+        tot = VC.sum(axis=(-2, -1))                               # [b, V]
+        K = kappa_vec(VC[:, None] @ _MAPM[None, :, None])         # [b, M, V]
+        use = (vl[None, :] == dial[sl, None]) & (tot > MIN_N_KAPPA)
+        acc = np.zeros(K.shape[:2])
+        nv = np.zeros(K.shape[:2])
+        for v in range(K.shape[2]):
+            good = use[:, v][:, None] & np.isfinite(K[:, :, v])
+            acc = acc + np.where(good, K[:, :, v], 0.0)
+            nv = nv + good
+        with np.errstate(divide="ignore", invalid="ignore"):
+            km = np.where(nv > 0, acc / nv, -np.inf)
+        mi = np.argmax(km, axis=1)
+        mi = np.where(np.isfinite(km).any(axis=1), mi, MAP_ID_IDX)
+        out[sl] = (dial[sl] - 1) * NMAP + mi
+    out[~ok] = RAW_C
+    return out, ok
+
+
+def grid_f1(fc: dict, Wt) -> np.ndarray:
+    """Pair-label F1@2 of every grid combo on query weights Wt -> [B, C]."""
+    Wt = np.atleast_2d(np.asarray(Wt, dtype=float))
+    TP, LR, HR = Wt @ fc["tp"].T, Wt @ fc["lr"].T, Wt @ fc["hr"]
+    den = LR + HR[:, None]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(den > 0, 2.0 * TP / den, np.nan)
+
+
+def fit_f1_vec(fc: dict, Wt) -> tuple[np.ndarray, np.ndarray]:
+    """F1-objective selection over the full (dial, map) grid: argmax of the
+    train pair-label F1@2; ties -> higher train pair-label linear kappa ->
+    PREF_ORDER (RAW first).  Never fails on a non-empty train set."""
+    Wt = np.atleast_2d(np.asarray(Wt, dtype=float))
+    F1 = grid_f1(fc, Wt)
+    F1 = np.where(np.isfinite(F1), F1, -np.inf)[:, PREF_ORDER]
+    K = kappa_vec((Wt @ fc["ccm_flat"]).reshape(Wt.shape[0], len(COMBOS), 4,
+                                                4))[:, PREF_ORDER]
+    cand = F1 == F1.max(axis=1, keepdims=True)
+    key = np.where(cand, np.where(np.isfinite(K), K, -1e300), -np.inf)
+    out = PREF_ORDER[np.argmax(key, axis=1)]
+    return out, Wt.sum(axis=1) > 0
+
+
+def crossfit_vec(fc: dict, Wq, fitter):
+    """2-fold query-disjoint cross-fit (fold of a query fixed by its md5 hash,
+    so a resampled query keeps its fold) for many query-multiplicity vectors.
+    Returns (combos [B,2] (test fold k -> column k), ok [B], test cm [B,4,4])."""
+    Wq = np.atleast_2d(np.asarray(Wq, dtype=float))
+    B = Wq.shape[0]
+    combos = np.full((B, 2), RAW_C, dtype=np.int64)
+    ok = np.ones(B, dtype=bool)
+    cm = np.zeros((B, 4, 4))
+    for k in (0, 1):
+        infold = fc["qfold"] == k
+        tr, te = Wq * (~infold), Wq * infold
+        c, okk = fitter(fc, tr)
+        ok &= okk & (tr.sum(axis=1) > 0) & (te.sum(axis=1) > 0)
+        c = np.where(ok, c, RAW_C)
+        combos[:, k] = c
+        cm += np.einsum("bq,bqij->bij", te, fc["ccm"][c])
+    return combos, ok, cm
+
+
+def arm_query_combos(fc: dict, fold_combos) -> np.ndarray:
+    """Per-query combo for an arm defined by (combo for test fold 0, fold 1)."""
+    return np.where(fc["qfold"] == 0, int(fold_combos[0]), int(fold_combos[1]))
+
+
+def arm_eval(fc: dict, arms: dict, Wt: np.ndarray) -> tuple[dict, dict, dict]:
+    """Point endpoints, bootstrap replicates and labels for per-query-combo arms."""
+    nq, ar = fc["nq"], np.arange(fc["nq"])
+    pts, reps, labs = {}, {}, {}
+    hden = Wt @ fc["n_all"]
+    hnum = Wt @ fc["h_all"]
+    qmean = fc["h_all"].sum() / fc["n_all"].sum()
+    for name, cq in arms.items():
+        cmq = fc["ccm"][cq, ar]
+        numq = fc["num"][cq, ar]
+        denq = fc["den"][COMBO_DIAL[cq] - 1, ar]
+        p = {ep: float(v) for ep, v in endpoints(cmq.sum(axis=0)).items()}
+        p["delta_cont"] = float(numq.sum() / denq.sum() - qmean)
+        pts[name] = p
+        r = endpoints(np.einsum("bq,qij->bij", Wt, cmq))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r["delta_cont"] = (Wt @ numq) / (Wt @ denq) - hnum / hden
+        reps[name] = r
+        labs[name] = fc["labs"][cq[fc["pair_q"]], np.arange(fc["nP"])]
+    return pts, reps, labs
+
+
+def _diff(pts, reps, a, b, eps=FX_EPS) -> dict:
+    return {ep: {"point": pts[a][ep] - pts[b][ep],
+                 "ci90": _ci90(reps[a][ep] - reps[b][ep])} for ep in eps}
+
+
+def _attrib(pts, reps, fam: str) -> dict:
+    """total = FULL-RAW; dial = DIAL-RAW; map = MAP-RAW;
+    interaction = (FULL-DIAL) - (MAP-RAW)  (exactly 0 when a choice is L3 /
+    identity, since the coinciding arms are bit-identical)."""
+    a = {x: f"{fam}:{x}" for x in FX_ARMS}
+    out = {}
+    for ep in FX_EPS:
+        P_ = {x: pts[a[x]][ep] for x in FX_ARMS}
+        R_ = {x: reps[a[x]][ep] for x in FX_ARMS}
+        comp = {
+            "total": (P_["FULL"] - P_["RAW"], R_["FULL"] - R_["RAW"]),
+            "dial": (P_["DIAL"] - P_["RAW"], R_["DIAL"] - R_["RAW"]),
+            "map": (P_["MAP"] - P_["RAW"], R_["MAP"] - R_["RAW"]),
+            "interaction": ((P_["FULL"] - P_["DIAL"]) - (P_["MAP"] - P_["RAW"]),
+                            (R_["FULL"] - R_["DIAL"]) - (R_["MAP"] - R_["RAW"])),
+        }
+        out[ep] = {k: {"point": v[0], "ci90": _ci90(v[1])}
+                   for k, v in comp.items()}
+    return out
+
+
+def coincidence_checks(fc, fam_choices: dict, labs: dict, pts: dict,
+                       reps: dict) -> list[dict]:
+    """Where a fitted/frozen choice is L3 (or identity) in a test fold, the
+    DIAL (MAP) arm must equal RAW and the MAP (DIAL) arm must equal FULL on
+    that fold's pairs; when it holds in BOTH folds the endpoints and bootstrap
+    replicates must be bit-identical.  Violations hard-fail."""
+    out = []
+    pf = fc["qfold"][fc["pair_q"]]
+    for fam, ch in fam_choices.items():
+        for kind, same_as_raw, same_as_full, pred in (
+                ("dial==L3", "DIAL", "MAP", lambda k: ch["dial"][k] == 3),
+                ("map==identity", "MAP", "DIAL",
+                 lambda k: tuple(ch["map"][k]) == IDENTITY_MAP)):
+            folds = [k for k in (0, 1) if pred(k)]
+            if not folds:
+                continue
+            m = np.isin(pf, folds)
+            bad = []
+            if not np.array_equal(labs[f"{fam}:{same_as_raw}"][m],
+                                  labs[f"{fam}:RAW"][m]):
+                bad.append(f"{same_as_raw}!=RAW labels")
+            if not np.array_equal(labs[f"{fam}:{same_as_full}"][m],
+                                  labs[f"{fam}:FULL"][m]):
+                bad.append(f"{same_as_full}!=FULL labels")
+            if len(folds) == 2:
+                for x, y in ((same_as_raw, "RAW"), (same_as_full, "FULL")):
+                    for ep in FX_EPS:
+                        if not _same(pts[f"{fam}:{x}"][ep], pts[f"{fam}:{y}"][ep]):
+                            bad.append(f"point {x}!={y} {ep}")
+                        if not np.array_equal(reps[f"{fam}:{x}"][ep],
+                                              reps[f"{fam}:{y}"][ep],
+                                              equal_nan=True):
+                            bad.append(f"boot {x}!={y} {ep}")
+            out.append({"family": fam, "kind": kind, "folds": folds,
+                        "violations": bad})
+            if bad:
+                sys.exit(f"ERROR: factorial coincidence violated ({fam}, {kind},"
+                         f" folds {folds}): {bad[:6]}")
+    return out
+
+
+def opcurve(fc: dict, cell: dict, marks: dict, fold_marks: dict):
+    """(B) L3 vote-sum threshold curve + in-sample (dial, map) grid.
+
+    Curve variable: v = K * (mean L3 record score), K = modal L3 records per
+    pair (v == the plain vote sum for pairs with K records); positive iff
+    v >= t, compared exactly as sum*K >= t*n.  t = 1..3K, plus the trivial
+    anchors t = 0 (all positive) and t = 3K+1 (none) so a matched-ratio
+    comparison is always defined.  Points between thresholds are linearly
+    interpolated in (n_pos, TP) — achievable by randomising between them.
+    """
+    h, cnt3 = cell["h"], cell["cnt"][2]
+    nrec = cnt3.sum(axis=1)
+    vsum = cnt3 @ np.arange(4)
+    vals, freq = np.unique(nrec, return_counts=True)
+    K = int(vals[np.argmax(freq)])
+    yt = h >= 2
+    hr, N = int(yt.sum()), len(h)
+
+    def stats(tp, lr):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return {"ratio@2": lr / hr if hr else np.nan,
+                    "P@2": tp / lr if lr else np.nan,
+                    "R@2": tp / hr if hr else np.nan,
+                    "F1@2": 2.0 * tp / (lr + hr) if lr + hr else np.nan,
+                    "n_pos": int(lr), "tp": int(tp)}
+
+    raw_bin = fc["labs"][RAW_C] >= 2
+    curve, raw_t = [], []
+    for t in range(0, 3 * K + 2):
+        yp = vsum * K >= t * nrec
+        s = stats(int((yt & yp).sum()), int(yp.sum()))
+        s.update({"t": t, "anchor": t in (0, 3 * K + 1)})
+        curve.append(s)
+        if np.array_equal(yp, raw_bin) and not s["anchor"]:
+            raw_t.append(t)
+    xs = {}
+    for c in curve:
+        xs[c["n_pos"]] = max(xs.get(c["n_pos"], -1), c["tp"])
+    lr_pts = np.array(sorted(xs), dtype=float)
+    tp_pts = np.array([xs[k] for k in sorted(xs)], dtype=float)
+
+    def curve_f1_at(ratio):
+        if ratio is None or not np.isfinite(ratio) or not hr:
+            return np.nan
+        lr = ratio * hr
+        tp = float(np.interp(lr, lr_pts, tp_pts))
+        return 2.0 * tp / (lr + hr) if lr + hr else np.nan
+
+    def versus(f1, ratio):
+        cf = curve_f1_at(ratio)
+        d = f1 - cf if np.isfinite(f1) and np.isfinite(cf) else np.nan
+        if not np.isfinite(d):
+            v = "n/a"
+        elif d > TIE_F1:
+            v = "above"
+        elif d < -TIE_F1:
+            v = "below"
+        else:
+            v = "on"
+        return cf, d, v
+
+    rows = []
+    for c in curve:
+        rows.append({"kind": "anchor" if c["anchor"] else "threshold_L3",
+                     "t": c["t"], "dial": 3, "map": "", "tag": "",
+                     **{k: c[k] for k in ("ratio@2", "P@2", "R@2", "F1@2",
+                                          "n_pos")},
+                     "curve_F1_at_ratio": np.nan, "dF1_vs_curve": np.nan})
+    tp_g, lr_g = fc["tp"].sum(axis=1), fc["lr"].sum(axis=1)
+    grid = []
+    for ci_, (l, m) in enumerate(COMBOS):
+        s = stats(int(tp_g[ci_]), int(lr_g[ci_]))
+        cf, d, _v = versus(s["F1@2"], s["ratio@2"])
+        tags = [nm for nm, cc in marks.items() if cc == ci_]
+        for nm, ccs in fold_marks.items():
+            tags += [f"{nm}_fold{k}" for k, cc in enumerate(ccs) if cc == ci_]
+        g = {"kind": "grid", "t": np.nan, "dial": l, "map": "".join(map(str, m)),
+             "tag": "+".join(tags),
+             **{k: s[k] for k in ("ratio@2", "P@2", "R@2", "F1@2", "n_pos")},
+             "curve_F1_at_ratio": cf, "dF1_vs_curve": d}
+        grid.append(g)
+        rows.append(g)
+    f1g = np.array([g["F1@2"] for g in grid], dtype=float)
+    gb = int(np.nanargmax(f1g))
+    thr = [c for c in curve if not c["anchor"]]
+    f1c = np.array([c["F1@2"] for c in thr], dtype=float)
+    cb = thr[int(np.nanargmax(f1c))]
+    summary = {
+        "K_records_mode": K, "frac_pairs_with_K": float((nrec == K).mean()),
+        "t_range": [1, 3 * K], "raw_equivalent_t": raw_t,
+        "curve_best": {"t": cb["t"], "F1@2": cb["F1@2"],
+                       "ratio@2": cb["ratio@2"], "P@2": cb["P@2"],
+                       "R@2": cb["R@2"]},
+        "grid_ceiling": {"combo": combo_name(gb), "F1@2": grid[gb]["F1@2"],
+                         "ratio@2": grid[gb]["ratio@2"],
+                         "P@2": grid[gb]["P@2"], "R@2": grid[gb]["R@2"],
+                         "note": "in-sample best-of-grid (optimistic ceiling)"},
+        "curve": [{k: c[k] for k in ("t", "ratio@2", "P@2", "R@2", "F1@2",
+                                     "n_pos")} for c in thr],
+        "points": {},
+    }
+    return rows, summary, versus
+
+
+def nested_bootstrap(fc: dict, B: int, seed: int) -> dict:
+    """Fit-aware CI: resample queries, redo the 2-fold cross-fit (kappa- and
+    F1-objective) inside every replicate, evaluate on the replicate."""
+    idx = boot_indices(fc["nq"], B, seed)
+    Wq = np.stack([np.bincount(r, minlength=fc["nq"]) for r in idx])\
+        .astype(float)
+    f1_raw = endpoints(np.einsum("bq,qij->bij", Wq, fc["ccm"][RAW_C]))["F1@2"]
+    d, oks, dials = {}, {}, {}
+    for name, fitter in (("REFIT", fit_kappa_vec), ("F1REFIT", fit_f1_vec)):
+        combos, ok, cm = crossfit_vec(fc, Wq, fitter)
+        x = endpoints(cm)["F1@2"] - f1_raw
+        x[~ok] = np.nan
+        d[name], oks[name] = x, ok
+        vals, cts = np.unique(COMBO_DIAL[combos[ok]].ravel(), return_counts=True)
+        dials[name] = {f"L{v}": int(c) for v, c in zip(vals, cts)}
+    both = oks["REFIT"] & oks["F1REFIT"]
+    dd = np.where(both, d["F1REFIT"] - d["REFIT"], np.nan)
+    return {"B": B, "seed": seed,
+            "n_ok": {k: int(v.sum()) for k, v in oks.items()},
+            "dial_freq_fold_fits": dials,
+            "REFIT-RAW F1@2": {"ci90": _ci90(d["REFIT"]),
+                               "mean": fnum(np.nanmean(d["REFIT"]))},
+            "F1REFIT-RAW F1@2": {"ci90": _ci90(d["F1REFIT"]),
+                                 "mean": fnum(np.nanmean(d["F1REFIT"]))},
+            "F1REFIT-REFIT F1@2": {"ci90": _ci90(dd),
+                                   "mean": fnum(np.nanmean(dd))}}
+
+
+def _dist(x) -> dict:
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if not x.size:
+        return {"n": 0}
+    return {"n": int(x.size), "mean": float(x.mean()),
+            "median": float(np.median(x)),
+            "sd": float(x.std(ddof=1)) if x.size > 1 else 0.0,
+            "min": float(x.min()), "max": float(x.max())}
+
+
+def e6_prime(fc: dict, sizes, B: int, seed: int) -> dict:
+    """(E) E6': calibrate on q WHOLE queries (simple random sample without
+    replacement), refit, evaluate dF1@2 (REFIT - RAW) on the query-disjoint
+    extension pool (all other queries)."""
+    nq, ppq = fc["nq"], fc["ppq"]
+    out = {"ppq": _dist(ppq), "B": B, "seed": seed, "sizes": {}}
+    for q in sizes:
+        key = str(q)
+        if q > nq - SE_MIN_POOL_QUERIES:
+            out["sizes"][key] = {"skipped": f"q={q} leaves < "
+                                            f"{SE_MIN_POOL_QUERIES} pool queries "
+                                            f"({nq} queries)"}
+            continue
+        rng = np.random.default_rng([seed, q])
+        chosen = np.argsort(rng.random((B, nq)), axis=1)[:, :q]
+        cal = np.zeros((B, nq))
+        np.put_along_axis(cal, chosen, 1.0, axis=1)
+        pool = 1.0 - cal
+        if (cal * pool).any():
+            sys.exit("ERROR: E6' calibration and pool share a query.")
+        pool_pairs = pool @ ppq
+        F1 = grid_f1(fc, pool)
+        base_ok = (pool_pairs >= SE_MIN_POOL_PAIRS) & np.isfinite(F1[:, RAW_C])
+        row = {"cal_pairs": _dist(cal @ ppq), "pool_pairs": _dist(pool_pairs),
+               "RAW_F1@2_pool": _dist(F1[base_ok, RAW_C])}
+        for name, fitter in (("REFIT", fit_kappa_vec), ("F1REFIT", fit_f1_vec)):
+            c, okf = fitter(fc, cal)
+            okd = base_ok & okf
+            d = F1[np.arange(B), c] - F1[:, RAW_C]
+            d = d[okd & np.isfinite(d)]
+            st = _dist(d)
+            st.update({"n_failed": int(B - d.size),
+                       "frac_catastrophic": (float((d < CATASTROPHIC_DF1).mean())
+                                             if d.size else None),
+                       "frac_ge0": float((d >= 0).mean()) if d.size else None})
+            vals, cts = np.unique(COMBO_DIAL[c[okd]], return_counts=True)
+            st["dial_freq"] = {f"L{v}": int(n) for v, n in zip(vals, cts)}
+            row[name] = st
+        out["sizes"][key] = row
+    out["verdict"] = {name: e6p_verdict(out["sizes"], name)
+                      for name in ("REFIT", "F1REFIT")}
+    return out
+
+
+def e6p_verdict(sizes: dict, name: str) -> str:
+    hi, lo = sizes.get(str(E6P_HI)), sizes.get(str(E6P_LO))
+    if not hi or "skipped" in hi or hi[name].get("n", 0) == 0:
+        return f"not applicable (q={E6P_HI} not evaluable)"
+    g_hi = hi[name]["mean"]
+    if not g_hi > TIE_F1:
+        return "not applicable (no gain to capture)"
+    if not lo or "skipped" in lo or lo[name].get("n", 0) == 0:
+        return f"not applicable (q={E6P_LO} not evaluable)"
+    frac = lo[name]["mean"] / g_hi
+    yes = frac >= E6P_FRAC
+    return (f"{'YES' if yes else 'NO'} — q={E6P_LO} captures {frac:.0%} of the "
+            f"q={E6P_HI} mean gain ({lo[name]['mean']:+.4f} vs {g_hi:+.4f}; "
+            f"criterion >= {E6P_FRAC:.0%})")
+
+
+def load_stored_labels(data_dir: Path, ds: str):
+    base = data_dir / "derived" / f"batch6_labels_{ds}"
+    for suf in (".parquet", ".pkl"):
+        p = base.with_suffix(suf)
+        if p.exists():
+            try:
+                df = pd.read_parquet(p) if suf == ".parquet" else pd.read_pickle(p)
+            except ImportError:
+                print(f"[labels] WARNING: no parquet engine to read {p}; "
+                      f"same-universe check skipped.", file=sys.stderr)
+                return None, p
+            return df, p
+    return None, base.with_suffix(".parquet")
+
+
+def check_stored(stored, model: str, cell: dict, labels: dict) -> str:
+    """Same universe and labels as `run` (batch6_labels_<ds>)."""
+    if stored is None:
+        return "not checked (no batch6_labels file)"
+    s = stored[stored.model_id == model]
+    if s.empty:
+        return "not checked (judge absent from batch6_labels file)"
+    keys = list(zip(s.qid.astype(str), s.docid.astype(str)))
+    if keys != list(cell["universe"]):
+        sys.exit(f"ERROR: '{model}' @ {cell['dataset']}: pair universe differs "
+                 f"from the stored batch6_labels file ({len(keys)} vs "
+                 f"{len(cell['universe'])} pairs) — not the SAME universe as "
+                 f"`run`.")
+    bad = [c for c in ("human", "RAW", "FROZEN", "REFIT")
+           if not np.array_equal(s[c].to_numpy(dtype=np.int64),
+                                 cell["h"] if c == "human" else labels[c])]
+    if bad:
+        sys.exit(f"ERROR: '{model}' @ {cell['dataset']}: recomputed {bad} "
+                 f"differ from the stored batch6_labels file.")
+    return "identical (universe, human, RAW, FROZEN, REFIT)"
+
+
+def followup_cell(cell: dict, rule: dict, B: int, nested_b: int, seed: int,
+                  fold_seed: int, e6p_sizes, e6p_B: int, stored=None) -> dict:
+    model, ds = cell["model"], cell["dataset"]
+    h, cnt, P = cell["h"], cell["cnt"], cell["P"]
+    nq = cell["n_queries"]
+    fc = followup_cache(cell, fold_seed)
+    dial_f = int(rule["dial_level"])
+    mono_f = tuple(int(x) for x in rule["monotone_map"])
+    labels = {"RAW": labels_from_counts(cnt[2], IDENTITY_MAP),
+              "FROZEN": labels_from_counts(cnt[dial_f - 1], mono_f)}
+    lab, rules_r, pair_fold, why = crossfit(cell, fold_seed)
+    if lab is None:
+        return {"model": model, "dataset": ds, "info": cell["info"],
+                "error": f"fold seed {fold_seed}: {why}"}
+    labels["REFIT"] = lab
+    if not np.array_equal(pair_fold, fc["qfold"][cell["pair_q"]]):
+        sys.exit(f"ERROR: '{model}' @ {ds}: query-level folds differ from the "
+                 f"cross-fit's pair folds.")
+    rules_r = sorted(rules_r, key=lambda r: r["test_fold"])
+    want = [combo_of(r["dial_level"], r["monotone_map"]) for r in rules_r]
+    ones = np.ones((1, nq))
+    ck, okk, _cm = crossfit_vec(fc, ones, fit_kappa_vec)
+    if not okk[0] or [int(x) for x in ck[0]] != want:
+        sys.exit(f"ERROR: '{model}' @ {ds}: vectorised kappa-objective fitter "
+                 f"chose {[combo_name(x) for x in ck[0]]} but batch-4 fit_rule "
+                 f"chose {[combo_name(x) for x in want]}.")
+    stored_note = check_stored(stored, model, cell, labels)
+
+    # batch-4 map fitted at L3 on each train fold (supplementary MAP@L3 arm)
+    row_fold = pair_fold[cell["row_u_P"]]
+    m3 = [fit_monotone_map(P, np.where(row_fold != k)[0], 3)[0] for k in (0, 1)]
+    cF, okF, _cmF = crossfit_vec(fc, ones, fit_f1_vec)
+    cF = [int(x) for x in cF[0]]
+
+    fam = {"FROZEN": {"dial": [dial_f, dial_f], "map": [mono_f, mono_f]},
+           "REFIT": {"dial": [r["dial_level"] for r in rules_r],
+                     "map": [tuple(r["monotone_map"]) for r in rules_r]}}
+    arms = {}
+    for f, ch in fam.items():
+        d, m = ch["dial"], ch["map"]
+        arms[f"{f}:RAW"] = arm_query_combos(fc, [RAW_C, RAW_C])
+        arms[f"{f}:DIAL"] = arm_query_combos(
+            fc, [combo_of(d[k], IDENTITY_MAP) for k in (0, 1)])
+        arms[f"{f}:MAP"] = arm_query_combos(fc, [combo_of(3, m[k]) for k in (0, 1)])
+        arms[f"{f}:FULL"] = arm_query_combos(fc, [combo_of(d[k], m[k])
+                                                  for k in (0, 1)])
+    arms["REFIT:MAP@L3"] = arm_query_combos(fc, [combo_of(3, m3[k])
+                                                 for k in (0, 1)])
+    arms["F1REFIT"] = arm_query_combos(fc, cF)
+    idx = boot_indices(nq, B, seed)
+    Wt = np.stack([np.bincount(r, minlength=nq) for r in idx]).astype(float)
+    pts, reps, labs = arm_eval(fc, arms, Wt)
+
+    # arms reproduce RAW / FROZEN / REFIT label sets exactly
+    for a, ls in (("FROZEN:RAW", "RAW"), ("REFIT:RAW", "RAW"),
+                  ("FROZEN:FULL", "FROZEN"), ("REFIT:FULL", "REFIT")):
+        if not np.array_equal(labs[a], labels[ls]):
+            sys.exit(f"ERROR: '{model}' @ {ds}: factorial arm {a} does not "
+                     f"reproduce the {ls} labels.")
+    # ... and experiment A's evaluation-only bootstrap, replicate for replicate
+    cms = {ls: cm_by_query(h, labels[ls], cell["pair_q"], nq)
+           for ls in LABEL_SETS}
+    ref = bootstrap(cms, B, seed)["ci90"]
+    for a, ls in (("FROZEN:RAW", "RAW"), ("FROZEN:FULL", "FROZEN"),
+                  ("REFIT:FULL", "REFIT")):
+        for ep in ("F1@2", "ratio@2", "P@2", "R@2", "MAE"):
+            if _ci90(reps[a][ep]) != ref[ls][ep]:
+                sys.exit(f"ERROR: '{model}' @ {ds}: arm {a} {ep} CI differs "
+                         f"from experiment A's bootstrap of {ls}.")
+    coinc = coincidence_checks(fc, fam, labs, pts, reps)
+
+    factorial = {}
+    for f, ch in fam.items():
+        names = [f"{f}:{x}" for x in FX_ARMS] + (["REFIT:MAP@L3"]
+                                                  if f == "REFIT" else [])
+        factorial[f] = {
+            "choices": {"dial": [int(x) for x in ch["dial"]],
+                        "map": [list(m) for m in ch["map"]]},
+            "arms": {n.split(":", 1)[1]: {
+                "point": {ep: pts[n][ep] for ep in FX_EPS},
+                "ci90": {ep: _ci90(reps[n][ep]) for ep in FX_EPS},
+                "diff_vs_RAW": _diff(pts, reps, n, f"{f}:RAW")}
+                for n in names},
+            "attribution": _attrib(pts, reps, f),
+        }
+    factorial["REFIT"]["map_at_L3_refit"] = [list(m) for m in m3]
+
+    # (C) F1-objective refit
+    Wtr = [(np.where(fc["qfold"] != k, 1.0, 0.0))[None, :] for k in (0, 1)]
+    train_f1 = {k: {"REFIT": float(grid_f1(fc, Wtr[k])[0, want[k]]),
+                    "F1REFIT": float(grid_f1(fc, Wtr[k])[0, cF[k]])}
+                for k in (0, 1)}
+    pts["REFIT"], reps["REFIT"] = pts["REFIT:FULL"], reps["REFIT:FULL"]
+    pts["RAW"], reps["RAW"] = pts["REFIT:RAW"], reps["REFIT:RAW"]
+    f1ref = {
+        "rules": [{"test_fold": k, "combo": combo_name(cF[k]),
+                   "dial_level": COMBOS[cF[k]][0],
+                   "monotone_map": list(COMBOS[cF[k]][1]),
+                   "train_F1@2": train_f1[k]["F1REFIT"],
+                   "train_F1@2_kappa_refit": train_f1[k]["REFIT"]}
+                  for k in (0, 1)],
+        "point": {ep: pts["F1REFIT"][ep] for ep in FX_EPS},
+        "ci90": {ep: _ci90(reps["F1REFIT"][ep]) for ep in FX_EPS},
+        "diff": {"F1REFIT-RAW": _diff(pts, reps, "F1REFIT", "RAW"),
+                 "F1REFIT-REFIT": _diff(pts, reps, "F1REFIT", "REFIT"),
+                 "REFIT-RAW": _diff(pts, reps, "REFIT", "RAW")},
+        "nested": nested_bootstrap(fc, nested_b, seed) if nested_b else None,
+        "ci_note": "diff CIs: evaluation-only query bootstrap (fit held fixed);"
+                   " 'nested': fit-aware (cross-fit redone per replicate)",
+    }
+
+    # (B) operating curve
+    marks = {"RAW": RAW_C, "FROZEN": combo_of(dial_f, mono_f)}
+    fold_marks = {"REFIT": want, "F1REFIT": cF}
+    rows, oc, versus = opcurve(fc, cell, marks, fold_marks)
+    for nm, a in (("RAW", "RAW"), ("FROZEN", "FROZEN:FULL"),
+                  ("REFIT", "REFIT"), ("F1REFIT", "F1REFIT"),
+                  ("REFIT:DIAL", "REFIT:DIAL"), ("REFIT:MAP", "REFIT:MAP")):
+        p = pts[a]
+        cf, dlt, v = versus(p["F1@2"], p["ratio@2"])
+        oc["points"][nm] = {"ratio@2": p["ratio@2"], "P@2": p["P@2"],
+                            "R@2": p["R@2"], "F1@2": p["F1@2"],
+                            "curve_F1_at_ratio": cf, "dF1_vs_curve": dlt,
+                            "vs_curve": v}
+        rows.append({"kind": "point", "t": np.nan,
+                     "dial": "", "map": "", "tag": nm,
+                     **{k: p[k] for k in ("ratio@2", "P@2", "R@2", "F1@2")},
+                     "n_pos": int(round(p["rate@2"] * len(h))),
+                     "curve_F1_at_ratio": cf, "dF1_vs_curve": dlt})
+
+    return {
+        "model": model, "dataset": ds, "info": cell["info"],
+        "n_pairs": len(h), "n_queries": nq, "fold_seed": fold_seed,
+        "rule_frozen": {"dial_level": dial_f, "monotone_map": list(mono_f),
+                        "in_sample": in_sample_note(rule, ds)},
+        "stored_labels_check": stored_note,
+        "factorial": factorial, "coincidences": coinc,
+        "f1_refit": f1ref, "opcurve": oc, "opcurve_rows": rows,
+        "e6_prime": (e6_prime(fc, e6p_sizes, e6p_B, seed)
+                     if e6p_sizes else None),
+    }
+
+
+# ───────────────────────────── printing ─────────────────────────────────────
+
+def _pm(d) -> str:
+    return f"{_f(d['point'], 7, 4, True)} {_ci(d['ci90'])}"
+
+
+def print_followup(res: dict) -> None:
+    print()
+    print("-" * 96)
+    print(f"  JUDGE: {res['model']}   dataset: {res['dataset']}   [{EXPLORATORY}]")
+    if "error" in res:
+        print(f"  ERROR: {res['error']}")
+        return
+    print(f"  pairs {res['n_pairs']}  queries {res['n_queries']}  fold seed "
+          f"{res['fold_seed']}  frozen rule L{res['rule_frozen']['dial_level']}/"
+          f"{''.join(map(str, res['rule_frozen']['monotone_map']))} "
+          f"({res['rule_frozen']['in_sample']})")
+    print(f"  same universe as `run`: {res['stored_labels_check']}")
+
+    print("\n  (A) 2x2 FACTORIAL  dial {L3, fitted} x map {identity, fitted}  "
+          "(eval-only query bootstrap, 90% CI)")
+    hdr = (f"  {'family:arm':<14}{'choice':<17}{'ratio@2':>8}{'P@2':>8}{'R@2':>8}"
+           f"{'F1@2':>8}{'MAE':>8}{'Δcont':>8}   dF1@2 vs RAW [90% CI]")
+    for f, fx in res["factorial"].items():
+        ch = fx["choices"]
+        print(f"\n  {f}: dial {ch['dial']}  map "
+              f"{[''.join(map(str, m)) for m in ch['map']]}  (test fold 0, 1)")
+        print(hdr)
+        for arm, a in fx["arms"].items():
+            if arm == "RAW":
+                desc = "L3/0123"
+            elif arm == "DIAL":
+                desc = "dial/0123"
+            elif arm == "MAP":
+                desc = "L3/map"
+            elif arm == "FULL":
+                desc = "dial/map"
+            else:
+                desc = "L3/map refit@L3"
+            p = a["point"]
+            print(f"  {f + ':' + arm:<14}{desc:<17}{_f(p['ratio@2'], 8, 3)}"
+                  f"{_f(p['P@2'], 8, 3)}{_f(p['R@2'], 8, 3)}{_f(p['F1@2'], 8, 3)}"
+                  f"{_f(p['MAE'], 8, 3)}{_f(p['delta_cont'], 8, 3, True)}   "
+                  f"{_pm(a['diff_vs_RAW']['F1@2'])}")
+        print(f"  attribution of the {f} effect (total = dial + map + "
+              f"interaction):")
+        for ep in ("F1@2", "absdev@2", "P@2", "R@2", "MAE", "delta_cont"):
+            at = fx["attribution"][ep]
+            print(f"    {ep:<10} total {_pm(at['total'])}  dial "
+                  f"{_pm(at['dial'])}  map {_pm(at['map'])}  inter "
+                  f"{_pm(at['interaction'])}")
+    if res["coincidences"]:
+        print("  coincidence checks (arm == RAW/FULL where the choice is L3 / "
+              "identity): " + "; ".join(
+                  f"{c['family']} {c['kind']} folds {c['folds']} OK"
+                  for c in res["coincidences"]))
+
+    oc = res["opcurve"]
+    print(f"\n  (B) OPERATING CURVE  L3 vote sum v = K*mean, K={oc['K_records_mode']}"
+          f" (share of pairs with K records {oc['frac_pairs_with_K']:.3f}), "
+          f"t={oc['t_range'][0]}..{oc['t_range'][1]}; RAW == t="
+          f"{oc['raw_equivalent_t'] or 'none (records per pair vary)'}")
+    print(f"  {'t':>3}{'ratio@2':>9}{'P@2':>8}{'R@2':>8}{'F1@2':>8}")
+    for c in oc["curve"]:
+        print(f"  {c['t']:>3}{_f(c['ratio@2'], 9, 3)}{_f(c['P@2'], 8, 3)}"
+              f"{_f(c['R@2'], 8, 3)}{_f(c['F1@2'], 8, 3)}")
+    cb, gc = oc["curve_best"], oc["grid_ceiling"]
+    print(f"  L3 threshold-curve best: t={cb['t']} F1@2={cb['F1@2']:.4f} at "
+          f"ratio@2={cb['ratio@2']:.3f}")
+    print(f"  in-sample best-of-grid F1 ceiling: {gc['combo']} F1@2="
+          f"{gc['F1@2']:.4f}; F1-optimal ratio@2 = {gc['ratio@2']:.3f}  "
+          f"(optimistic: chosen on the evaluation data)")
+    for nm, p in oc["points"].items():
+        print(f"  {nm:<11} ratio {_f(p['ratio@2'], 6, 3)}  F1 "
+              f"{_f(p['F1@2'], 6, 4)}  curve@ratio {_f(p['curve_F1_at_ratio'], 6, 4)}"
+              f"  d {_f(p['dF1_vs_curve'], 7, 4, True)}  -> {p['vs_curve']}"
+              f"{'  (lost discrimination vs re-thresholding L3)' if p['vs_curve'] == 'below' else ''}")
+
+    fr = res["f1_refit"]
+    print("\n  (C) F1-OBJECTIVE REFIT (grid argmax of train F1@2; ties -> "
+          "train kappa -> RAW-first order)")
+    for r in fr["rules"]:
+        print(f"    test fold {r['test_fold']}: {r['combo']}  train F1@2 "
+              f"{r['train_F1@2']:.4f} (kappa-refit rule on same train fold "
+              f"{r['train_F1@2_kappa_refit']:.4f})")
+    p = fr["point"]
+    print(f"    held-out: F1@2 {p['F1@2']:.4f}  P@2 {p['P@2']:.4f}  R@2 "
+          f"{p['R@2']:.4f}  ratio@2 {p['ratio@2']:.3f}")
+    nb = fr["nested"]
+    for k, lbl in (("F1REFIT-RAW", "F1REFIT-RAW"), ("F1REFIT-REFIT",
+                                                    "F1REFIT-REFIT(kappa)"),
+                   ("REFIT-RAW", "REFIT(kappa)-RAW")):
+        line = f"    dF1@2 {lbl:<21} {_pm(fr['diff'][k]['F1@2'])} eval-only"
+        if nb:
+            nk = {"F1REFIT-RAW": "F1REFIT-RAW F1@2",
+                  "F1REFIT-REFIT": "F1REFIT-REFIT F1@2",
+                  "REFIT-RAW": "REFIT-RAW F1@2"}[k]
+            line += f"   {_ci(nb[nk]['ci90'])} fit-aware (nested B={nb['B']})"
+        print(line)
+    if nb:
+        print(f"    nested replicates ok: {nb['n_ok']}")
+
+    e6 = res["e6_prime"]
+    if e6:
+        pp = e6["ppq"]
+        print(f"\n  (E) E6' SAMPLE EFFICIENCY in calibration QUERIES (B={e6['B']};"
+              f" pairs/query mean {pp['mean']:.1f}, median {pp['median']:.0f}, "
+              f"range {pp['min']:.0f}-{pp['max']:.0f})")
+        print(f"    {'q':>3} {'cal pairs':>10} {'pool':>6}  objective   "
+              f"{'mean dF1':>9} {'median':>8} {'P(dF1<-.05)':>12} {'P(>=0)':>7}"
+              f" {'n':>5}")
+        for q, row in e6["sizes"].items():
+            if "skipped" in row:
+                print(f"    {q:>3}  skipped: {row['skipped']}")
+                continue
+            for nm in ("REFIT", "F1REFIT"):
+                st = row[nm]
+                if not st.get("n"):
+                    print(f"    {q:>3}  {nm}: no successful draws")
+                    continue
+                print(f"    {q:>3} {row['cal_pairs']['mean']:>10.1f} "
+                      f"{row['pool_pairs']['mean']:>6.0f}  "
+                      f"{'kappa' if nm == 'REFIT' else 'F1':<10}"
+                      f"{st['mean']:>+9.4f} {st['median']:>+8.4f} "
+                      f"{st['frac_catastrophic']:>12.3f} {st['frac_ge0']:>7.3f}"
+                      f" {st['n']:>5}")
+        for nm, v in e6["verdict"].items():
+            print(f"    E6' ({'kappa' if nm == 'REFIT' else 'F1'}-objective): "
+                  f"captures >=80% of the q={E6P_HI} gain by q={E6P_LO}? {v}")
+
+
+# ───────────────────────────── outputs ──────────────────────────────────────
+
+def _jclean(o):
+    if isinstance(o, dict):
+        return {str(k): _jclean(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_jclean(v) for v in o]
+    if isinstance(o, np.ndarray):
+        return [_jclean(v) for v in o.tolist()]
+    if isinstance(o, (bool, np.bool_)):
+        return bool(o)
+    if isinstance(o, (int, np.integer)):
+        return int(o)
+    if isinstance(o, (float, np.floating)):
+        return fnum(o)
+    return o
+
+
+def write_followup(results: list[dict], ds: str, data_dir: Path,
+                   meta: dict) -> None:
+    der = data_dir / "derived"
+    tex_dir = der / "tex"
+    der.mkdir(parents=True, exist_ok=True)
+    ok = [r for r in results if "error" not in r]
+    for r in ok:
+        p = der / f"batch6_opcurve_{ds}_{judge_slug(r['model'])}.csv"
+        pd.DataFrame(r["opcurve_rows"]).to_csv(p, index=False)
+        print(f"[csv] wrote {p}")
+    stamp = f"[{EXPLORATORY}] "
+    rows = []
+    for r in ok:
+        for f, fx in r["factorial"].items():
+            for arm, a in fx["arms"].items():
+                p, c = a["point"], a["ci90"]
+                d = a["diff_vs_RAW"]["F1@2"]
+                rows.append(
+                    f"{esc(r['model'])} & {f} & {esc(arm)} & "
+                    f"{_t(p['ratio@2'])} & {_t(p['P@2'])} & {_t(p['R@2'])} & "
+                    f"{_t(p['F1@2'])} {_tci(c['F1@2'])} & {_t(p['MAE'])} & "
+                    f"{_t(p['delta_cont'], sign=True)} & "
+                    f"{_t(d['point'], sign=True)} {_tci(d['ci90'])} \\\\")
+    write_tex(tex_dir, f"batch6_followup_{ds}_factorial.tex", rows,
+              f"{stamp}Batch 6 follow-up (A) on {ds}: 2x2 factorial dial "
+              f"{{L3, chosen}} x map {{identity, chosen}} for the frozen rule "
+              f"and the query-disjoint 2-fold cross-fit (fold seed "
+              f"{meta['fold_seed']}); MAP@L3 = map refitted at L3. Columns: "
+              f"judge, family, arm, ratio@2, P@2, R@2, F1@2 [90\\% CI], MAE, "
+              f"continuous Delta, dF1@2 vs RAW [90\\% CI]. Query bootstrap "
+              f"B={meta['B']}, seed {meta['seed']}, evaluation-only.")
+    rows = []
+    for r in ok:
+        for f, fx in r["factorial"].items():
+            for ep in ("F1@2", "absdev@2", "MAE", "delta_cont"):
+                at = fx["attribution"][ep]
+                rows.append(
+                    f"{esc(r['model'])} & {f} & {esc(ep)} & " + " & ".join(
+                        f"{_t(at[k]['point'], sign=True)} {_tci(at[k]['ci90'])}"
+                        for k in ("total", "dial", "map", "interaction"))
+                    + " \\\\")
+    write_tex(tex_dir, f"batch6_followup_{ds}_attrib.tex", rows,
+              f"{stamp}Batch 6 follow-up (A) on {ds}: attribution of the "
+              f"FROZEN / REFIT effect vs RAW into dial-only, map-only and "
+              f"interaction = (FULL-DIAL)-(MAP-RAW). Columns: judge, family, "
+              f"endpoint, total, dial, map, interaction [90\\% CI].")
+    rows = []
+    for r in ok:
+        oc = r["opcurve"]
+        pt = oc["points"]
+        rows.append(
+            f"{esc(r['model'])} & {_t(oc['curve_best']['F1@2'])} "
+            f"({oc['curve_best']['t']}; {_t(oc['curve_best']['ratio@2'])}) & "
+            f"{_t(oc['grid_ceiling']['F1@2'])} "
+            f"({_t(oc['grid_ceiling']['ratio@2'])}) & "
+            + " & ".join(f"{_t(pt[k]['dF1_vs_curve'], sign=True)}"
+                         for k in ("RAW", "FROZEN", "REFIT", "F1REFIT"))
+            + " \\\\")
+    write_tex(tex_dir, f"batch6_followup_{ds}_opcurve.tex", rows,
+              f"{stamp}Batch 6 follow-up (B) on {ds}: L3 vote-sum threshold "
+              f"curve vs the in-sample (dial L1-L5) x (35 monotone maps) grid. "
+              f"Columns: judge, best curve F1@2 (t; ratio@2), in-sample "
+              f"best-of-grid F1@2 ceiling (its ratio@2), and F1@2 minus the "
+              f"L3 curve's F1@2 at matched ratio for RAW, CORR-frozen, "
+              f"CORR-refit (kappa objective), CORR-refit (F1 objective); "
+              f"negative = discrimination lost vs re-thresholding L3.")
+    rows = []
+    for r in ok:
+        fr = r["f1_refit"]
+        nb = fr["nested"] or {}
+        rows.append(
+            f"{esc(r['model'])} & {_t(fr['point']['F1@2'])} & "
+            f"{_t(fr['point']['P@2'])} & {_t(fr['point']['R@2'])} & "
+            f"{_t(fr['point']['ratio@2'])} & "
+            + " & ".join(
+                f"{_t(fr['diff'][k]['F1@2']['point'], sign=True)} "
+                f"{_tci(fr['diff'][k]['F1@2']['ci90'])}"
+                + (f" {_tci(nb[nk]['ci90'])}" if nb else "")
+                for k, nk in (("REFIT-RAW", "REFIT-RAW F1@2"),
+                              ("F1REFIT-RAW", "F1REFIT-RAW F1@2"),
+                              ("F1REFIT-REFIT", "F1REFIT-REFIT F1@2")))
+            + " \\\\")
+    write_tex(tex_dir, f"batch6_followup_{ds}_f1refit.tex", rows,
+              f"{stamp}Batch 6 follow-up (C) on {ds}: F1-objective refit "
+              f"(query-disjoint 2-fold cross-fit, grid argmax of train F1@2). "
+              f"Columns: judge, held-out F1@2, P@2, R@2, ratio@2; dF1@2 "
+              f"REFIT(kappa)-RAW, F1REFIT-RAW, F1REFIT-REFIT(kappa), each with "
+              f"the evaluation-only 90\\% CI (B={meta['B']}) then the fit-aware "
+              f"nested-bootstrap 90\\% CI (B={meta['nested_b']}).")
+    rows = []
+    for r in ok:
+        e6 = r["e6_prime"]
+        if not e6:
+            continue
+        for q, row in e6["sizes"].items():
+            if "skipped" in row:
+                continue
+            for nm in ("REFIT", "F1REFIT"):
+                st = row[nm]
+                if not st.get("n"):
+                    continue
+                rows.append(
+                    f"{esc(r['model'])} & {'kappa' if nm == 'REFIT' else 'F1'} &"
+                    f" {q} & {row['cal_pairs']['mean']:.0f} & "
+                    f"{row['pool_pairs']['mean']:.0f} & "
+                    f"{_t(st['mean'], sign=True)} & {_t(st['median'], sign=True)}"
+                    f" & {st['frac_catastrophic']:.3f} \\\\")
+    write_tex(tex_dir, f"batch6_followup_{ds}_e6p.tex", rows,
+              f"{stamp}Batch 6 follow-up (E) on {ds}: E6' sample efficiency in "
+              f"calibration queries q (whole queries, simple random sample, "
+              f"B={meta['e6p_B']}); refit on q queries, evaluated on the "
+              f"query-disjoint extension pool. Columns: judge, objective, q, "
+              f"mean calibration pairs, mean pool pairs, mean and median "
+              f"dF1@2 (REFIT-RAW), fraction of draws with dF1@2 < "
+              f"{CATASTROPHIC_DF1}.")
+    payload = {"meta": {**meta, "dataset": ds},
+               "judges": {r["model"]: {k: v for k, v in r.items()
+                                       if k != "opcurve_rows"}
+                          for r in results}}
+    path = der / f"batch6_followup_{ds}.json"
+    path.write_text(json.dumps(_jclean(payload), indent=2, ensure_ascii=False,
+                               allow_nan=False), encoding="utf-8")
+    print(f"[json] wrote {path}")
+
+
+def followup_datasets(df, qrels, rules_all, datasets, judges, flagships,
+                      data_dir, B, nested_b, seed, fold_seed, e6p_sizes,
+                      e6p_B, check_labels: bool = True) -> dict:
+    out: dict = {}
+    frozen_pairs: dict = {}
+    for ds in datasets:
+        stored = None
+        if check_labels:
+            stored, sp = load_stored_labels(data_dir, ds)
+            if stored is None:
+                print(f"[labels] WARNING: {sp} not found — cannot verify the "
+                      f"universe equals `run`'s.", file=sys.stderr)
+        res_ds = []
+        for model in judges:
+            d, restricted = scope_rows(df, model, ds, flagships, data_dir,
+                                       frozen_pairs)
+            rule = frozen_rule(rules_all, model, ds) if not d.empty else None
+            if d.empty or rule is None:
+                res_ds.append({"model": model, "dataset": ds, "info": {},
+                               "error": (f"no {ds} rows" if d.empty else
+                                         f"no frozen {FAMILY_OF[ds]} rule")})
+                continue
+            cell = prepare_cell(model, ds, d, qrels, seed)
+            cell["info"]["flagship"] = restricted
+            if "error" in cell:
+                res_ds.append({"model": model, "dataset": ds,
+                               "info": cell["info"], "error": cell["error"]})
+                continue
+            res_ds.append(followup_cell(cell, rule, B, nested_b, seed,
+                                        fold_seed, e6p_sizes, e6p_B, stored))
+        out[ds] = res_ds
+    return out
+
+
+def cmd_followup(args) -> None:
+    import time
+    t0 = time.time()
+    datasets = resolve_datasets(args.datasets)
+    assert_not_sealed(datasets, unseal=args.unseal_dl22)     # BEFORE data
+    data_dir = resolve_data_dir(args.data_dir)
+    rules_all, rules_path, sha = load_rules(data_dir, args.rules)
+    fold_seed = _fold_seeds(args.fold_seeds)[0]
+    jpath = Path(args.judgments) if args.judgments else \
+        data_dir / "derived" / "judgments.parquet"
+    df = load_judgments(jpath)
+    df = df[df.dataset.astype(str).isin(datasets)]
+    qrels = load_human(datasets, args.qrels_json)
+    judges, flagships = _judges(args.judges), _flagships(args.flagships)
+    qsizes = [int(x) for x in args.q_sizes.split(",") if x.strip()]
+    meta = {"script": "scripts/batch6_poolext.py followup",
+            "status": EXPLORATORY, "exploratory": True,
+            "pre_registered": False, "git_hash": git_hash(),
+            "code_dirty": code_dirty(), "rules_path": str(rules_path),
+            "rules_sha256": sha, "B": args.b, "nested_b": args.nested_b,
+            "seed": args.seed, "fold_seed": fold_seed, "ci": "90% percentile",
+            "e6p_B": args.e6p_b, "e6p_q_sizes": qsizes,
+            "catastrophic_dF1": CATASTROPHIC_DF1, "tie_f1": TIE_F1,
+            "qrels_source": args.qrels_json or "src.qrels",
+            "timestamp_utc": datetime.datetime.now(datetime.timezone.utc)
+            .isoformat(timespec="seconds")}
+    res = followup_datasets(df, qrels, rules_all, datasets, judges, flagships,
+                            data_dir, args.b, args.nested_b, args.seed,
+                            fold_seed, qsizes, args.e6p_b)
+    for ds in datasets:
+        print()
+        print("=" * 96)
+        print(f"  BATCH 6 FOLLOW-UP   dataset={ds}   *** {EXPLORATORY} ***")
+        print("=" * 96)
+        print(f"  code git {meta['git_hash']} (dirty: {meta['code_dirty']})  "
+              f"rules_sha256 {sha[:12]}  fold seed {fold_seed}  B={args.b}  "
+              f"nested B={args.nested_b}  E6' B={args.e6p_b} q={qsizes}")
+        print("  FRAMING: operating-point artifact removal against THESE "
+              "annotators, never judgment quality.")
+        for r in res[ds]:
+            print_followup(r)
+    if not any("error" not in r for ds in datasets for r in res[ds]):
+        sys.exit("\nERROR: no (judge, dataset) cell produced a result.")
+    print()
+    for ds in datasets:
+        write_followup(res[ds], ds, data_dir, meta)
+    print(f"\n[{EXPLORATORY}] done in {time.time() - t0:.1f}s")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # selftest — synthetic stub, offline
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -2017,6 +3105,257 @@ def _fill_stub_registration(lines: list[str]) -> str:
             ln = ln.replace("预测：____", f"预测：{tok}")
         out.append(ln.replace("____", "2026-10-11"))
     return "\n".join(out)
+
+
+def _noisy_stub(qrels: dict, seed: int = 11) -> pd.DataFrame:
+    """Lenient dl21 judge with heavy record noise and ONE run (K=3 records at
+    L3, as in production) — exercises near-ties in the fitters, a non-trivial
+    nested bootstrap and the K=3 vote-sum curve."""
+    rng = np.random.default_rng(seed)
+    offs = {1: 0, 2: 1, 3: 1, 4: 1, 5: 1}
+    rows = []
+    for (ds, q, doc), g in qrels.items():
+        if ds != "dl21" or doc == "dl21-extra":
+            continue
+        for l in LEVELS:
+            for para in "abc":
+                s = min(3, max(0, g + offs[l]))
+                if rng.random() < 0.40:
+                    s = min(3, max(0, s + int(rng.choice([-1, 1]))))
+                fail = rng.random() < 0.01
+                rows.append({"model_id": "stub/noisy", "prompt_id": f"L{l}_{para}",
+                             "politeness_level": l, "dataset": ds, "qid": q,
+                             "docid": doc, "run": 1,
+                             "score": np.nan if fail else float(s),
+                             "parse_ok": not fail})
+    return pd.DataFrame(rows)
+
+
+def selftest_followup(check, df, qrels, rules, root: Path, R: dict) -> None:
+    import contextlib
+    import io
+    import shutil
+    import time
+    print("\n  -- follow-up subcommand (EXPLORATORY) --")
+    t0 = time.time()
+    R = {k: v for k, v in R.items() if "error" not in v}
+    out = root / "out"
+    shutil.copytree(root / "inputs", out / "inputs", dirs_exist_ok=True)
+    df2 = pd.concat([df, _noisy_stub(qrels)], ignore_index=True)
+    rules2 = json.loads(json.dumps(rules))
+    rules2["rules"]["stub/noisy"] = {"msmarco": {
+        "dial_level": 3, "monotone_map": [0, 0, 1, 2],
+        "datasets": ["dl19", "dl20", "dl21"], "delta_hat": 0.9}}
+    judges = list(STUB_JUDGES) + ["stub/noisy"]
+    flag = frozenset({"stub/flag"})
+    fu = followup_datasets(df2, qrels, rules2, ["dl21", "antique"], judges,
+                           flag, out, 200, 60, SEED, FOLD_SEEDS[0], E6P_SIZES,
+                           150)
+    F = {(r["model"], r["dataset"]): r for ds in fu for r in fu[ds]
+         if "error" not in r}
+    print(f"  ({len(F)} follow-up cells in {time.time() - t0:.1f}s; vectorised "
+          f"kappa fitter == batch-4 fit_rule on every primary cross-fit, arms "
+          f"== RAW/FROZEN/REFIT labels and experiment-A bootstrap CIs — "
+          f"asserted inside followup_cell)")
+    check("follow-up: every stub cell analysed (incl. noisy K=3 judge)",
+          len(F) == len(R) + 1 and ("stub/noisy", "dl21") in F, f"{len(F)}")
+    check("follow-up: same universe/labels as `run` (stored labels file)",
+          all(F[k]["stored_labels_check"].startswith("identical") for k in R),
+          F[("stub/noisy", "dl21")]["stored_labels_check"])
+
+    # (A) factorial reproduces experiment A and the coincidence identities
+    bad = []
+    for k, r in R.items():
+        fx = F[k]["factorial"]
+        for fam, arm, ls in (("FROZEN", "RAW", "RAW"), ("FROZEN", "FULL", "FROZEN"),
+                             ("REFIT", "FULL", "REFIT")):
+            for ep in ("F1@2", "ratio@2", "P@2", "R@2", "MAE", "absdev@2"):
+                if not _same(fx[fam]["arms"][arm]["point"][ep], r["points"][ls][ep]):
+                    bad.append((k, fam, arm, ep))
+            if not _same(fx[fam]["arms"][arm]["point"]["delta_cont"],
+                         r["delta_cont"][ls]):
+                bad.append((k, fam, arm, "delta_cont"))
+    check("factorial: (L3,id) / frozen / fitted arms == RAW / FROZEN / REFIT of "
+          "experiment A bit-exactly (points + continuous Delta)", not bad,
+          str(bad[:3]))
+    kinds = {(c["family"], c["kind"]) for r in F.values()
+             for c in r["coincidences"] if len(c["folds"]) == 2}
+    check("factorial: coincidence identities exercised for dial==L3 and "
+          "map==identity (both folds) and all held",
+          {("FROZEN", "dial==L3"), ("FROZEN", "map==identity"),
+           ("REFIT", "map==identity")} <= kinds, str(sorted(kinds)))
+    fx = F[("stub/lenient", "dl21")]["factorial"]["FROZEN"]
+    at = fx["attribution"]["F1@2"]
+    check("factorial: lenient frozen L3/0012 -> DIAL==RAW, MAP==FULL, dial and "
+          "interaction exactly 0",
+          fx["arms"]["DIAL"]["point"] == fx["arms"]["RAW"]["point"]
+          and fx["arms"]["MAP"]["point"] == fx["arms"]["FULL"]["point"]
+          and at["dial"]["point"] == 0.0 and at["interaction"]["point"] == 0.0
+          and at["map"]["point"] == at["total"]["point"] > 0.2,
+          f"total {at['total']['point']:+.4f}")
+    fx = F[("stub/flag", "dl21")]["factorial"]["FROZEN"]
+    check("factorial: flagship frozen L1/identity -> MAP==RAW, DIAL==FULL",
+          fx["arms"]["MAP"]["point"] == fx["arms"]["RAW"]["point"]
+          and fx["arms"]["DIAL"]["point"] == fx["arms"]["FULL"]["point"])
+    rn = F[("stub/noisy", "dl21")]
+    ch = rn["factorial"]["REFIT"]["choices"]
+    cell_n = prepare_cell("stub/noisy", "dl21",
+                          scope_rows(df2, "stub/noisy", "dl21", flag, out,
+                                     {})[0], qrels, SEED)
+    fc_n = followup_cache(cell_n, FOLD_SEEDS[0])
+    arms = {f"X:{a}": arm_query_combos(fc_n, [combo_of(d, m) for d, m in cc])
+            for a, cc in (("RAW", [(3, IDENTITY_MAP)] * 2),
+                          ("DIAL", [(3, IDENTITY_MAP)] * 2),   # doctored
+                          ("MAP", [(3, IDENTITY_MAP)] * 2),
+                          ("FULL", [(1, (0, 1, 2, 3))] * 2))}
+    Wt1 = np.ones((3, fc_n["nq"]))
+    p_, r_, l_ = arm_eval(fc_n, arms, Wt1)
+    try:
+        coincidence_checks(fc_n, {"X": {"dial": [3, 3], "map": [(0, 1, 2, 3)] * 2}},
+                           l_, p_, r_)
+        check("factorial: coincidence check hard-fails on a doctored arm", False)
+    except SystemExit:
+        check("factorial: coincidence check hard-fails on a doctored arm", True)
+
+    # vectorised kappa fitter == batch-4 fit_rule on explicitly resampled rows
+    worst = []
+    for key in (("stub/noisy", "dl21"), ("stub/strict", "antique")):
+        m_, ds_ = key
+        cell = prepare_cell(m_, ds_, scope_rows(df2, m_, ds_, flag, out, {})[0],
+                            qrels, SEED)
+        fc = followup_cache(cell, FOLD_SEEDS[0])
+        q_rows = [np.where(fc["row_q"] == q)[0] for q in range(fc["nq"])]
+        idx = boot_indices(fc["nq"], 12, SEED + 5)
+        for b in range(12):
+            w = np.bincount(idx[b], minlength=fc["nq"])
+            for k in (0, 1):
+                wk = w * (fc["qfold"] != k)
+                rows = np.concatenate([np.repeat(q_rows[q], wk[q])
+                                       for q in range(fc["nq"]) if wk[q]] or
+                                      [np.array([], dtype=np.int64)])
+                r = fit_rule(cell["P"], rows)
+                cv, okv = fit_kappa_vec(fc, wk[None, :])
+                want = (None if r is None else
+                        combo_of(r["dial_level"], r["monotone_map"]))
+                got = int(cv[0]) if okv[0] else None
+                if want != got:
+                    worst.append((key, b, k, want, got))
+    check("kappa fitter (vectorised, query weights) == batch-4 fit_rule on "
+          "explicitly duplicated rows (2 cells x 12 replicates x 2 folds)",
+          not worst, str(worst[:3]))
+
+    # (B) operating curve
+    mono_bad, p_bad = [], []
+    for k, r in F.items():
+        cv = r["opcurve"]["curve"]
+        for a, b in zip(cv, cv[1:]):
+            for ep in ("ratio@2", "R@2"):
+                if not b[ep] <= a[ep] + 1e-12:
+                    mono_bad.append((k, ep, a["t"]))
+            if (np.isfinite(a["P@2"]) and np.isfinite(b["P@2"])
+                    and not b["P@2"] >= a["P@2"] - 1e-12):
+                p_bad.append((k, a["t"], a["P@2"], b["P@2"]))
+    check("opcurve: ratio@2 and R@2 non-increasing in t (invariant, all cells)",
+          not mono_bad, str(mono_bad[:3]))
+    check("opcurve: P@2 non-decreasing in t (monotone stub judges)", not p_bad,
+          str(p_bad[:3]))
+    oc_n = rn["opcurve"]
+    check("opcurve: K=6 stub cells reproduce RAW at t=9; noisy judge K=3",
+          all(9 in F[k]["opcurve"]["raw_equivalent_t"]
+              for k in F if k[0] != "stub/noisy")
+          and oc_n["K_records_mode"] == 3 and oc_n["t_range"] == [1, 9],
+          f"noisy RAW-equivalent t: {oc_n['raw_equivalent_t']}")
+    check("opcurve: in-sample grid ceiling >= RAW and FROZEN F1@2; RAW on the "
+          "L3 curve",
+          all(F[k]["opcurve"]["grid_ceiling"]["F1@2"] + 1e-12
+              >= max(F[k]["opcurve"]["points"]["RAW"]["F1@2"],
+                     F[k]["opcurve"]["points"]["FROZEN"]["F1@2"])
+              and abs(F[k]["opcurve"]["points"]["RAW"]["dF1_vs_curve"]) < 1e-12
+              for k in F if k[0] != "stub/noisy"))
+    print("  noisy judge points vs L3 curve: " + "; ".join(
+        f"{nm} {p['vs_curve']} ({p['dF1_vs_curve']:+.4f})"
+        for nm, p in oc_n["points"].items()))
+
+    # (C) F1-objective refit
+    bad = [(k, x["test_fold"], x["train_F1@2"], x["train_F1@2_kappa_refit"])
+           for k, r in F.items() for x in r["f1_refit"]["rules"]
+           if not x["train_F1@2"] >= x["train_F1@2_kappa_refit"]]
+    check("F1-objective refit >= kappa-objective refit in train-fold F1@2 "
+          "(every cell, both folds)", not bad, str(bad[:3]))
+    check("F1-objective refit strictly better on some train fold (noisy judge)",
+          any(x["train_F1@2"] > x["train_F1@2_kappa_refit"]
+              for x in rn["f1_refit"]["rules"]),
+          str([(x["combo"], round(x["train_F1@2"], 4),
+                round(x["train_F1@2_kappa_refit"], 4))
+               for x in rn["f1_refit"]["rules"]]))
+    bad = []
+    for k, r in F.items():
+        fr = r["f1_refit"]
+        for dk, nk in (("REFIT-RAW", "REFIT-RAW F1@2"),
+                       ("F1REFIT-RAW", "F1REFIT-RAW F1@2")):
+            v = fr["diff"][dk]["F1@2"]["point"]
+            lo, hi, _n = fr["nested"][nk]["ci90"]
+            if lo is None or not lo - 1e-12 <= v <= hi + 1e-12:
+                bad.append((k, dk, v, lo, hi))
+    nb = rn["f1_refit"]["nested"]
+    check("nested (fit-aware) bootstrap 90% CI contains the point estimate "
+          "(all cells, both objectives)", not bad,
+          f"noisy REFIT-RAW {_ci(nb['REFIT-RAW F1@2']['ci90'])} vs eval-only "
+          f"{_ci(rn['f1_refit']['diff']['REFIT-RAW']['F1@2']['ci90'])}; "
+          f"violations {bad[:2]}")
+
+    # (E) E6'
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        print_followup(F[("stub/noop", "dl21")])
+    txt = buf.getvalue()
+    check("E6': no-gain stub (noop) prints 'not applicable (no gain to capture)'",
+          txt.count("not applicable (no gain to capture)") == 2,
+          str(F[("stub/noop", "dl21")]["e6_prime"]["verdict"]))
+    e6 = F[("stub/lenient", "dl21")]["e6_prime"]
+    check("E6': lenient stub states a verdict; antique (30 q) q=32 skipped",
+          all(v.startswith(("YES", "NO")) for v in e6["verdict"].values())
+          and "skipped" in F[("stub/strict", "antique")]["e6_prime"]["sizes"]["32"]
+          and F[("stub/strict", "antique")]["e6_prime"]["verdict"]["REFIT"]
+          .startswith("not applicable (q=32"), str(e6["verdict"]))
+    fake = {"8": {"REFIT": {"n": 5, "mean": 0.01}},
+            "32": {"REFIT": {"n": 5, "mean": TIE_F1}}}
+    fake2 = {"8": {"REFIT": {"n": 5, "mean": 0.07}},
+             "32": {"REFIT": {"n": 5, "mean": 0.10}}}
+    check("E6' verdict rule: q=32 gain <= TIE_F1 -> not applicable; 70% -> NO",
+          e6p_verdict(fake, "REFIT") == "not applicable (no gain to capture)"
+          and e6p_verdict(fake2, "REFIT").startswith("NO"))
+    sz = e6["sizes"]["8"]
+    check("E6': whole queries (cal pairs == q x pairs/query), catastrophic "
+          "fraction reported",
+          abs(sz["cal_pairs"]["mean"] - 8 * e6["ppq"]["mean"]) < 1.0
+          and sz["REFIT"]["frac_catastrophic"] is not None
+          and sz["F1REFIT"]["n"] > 0, f"cal pairs {sz['cal_pairs']['mean']:.1f}")
+
+    # writers + gate
+    meta = {"status": EXPLORATORY, "exploratory": True, "pre_registered": False,
+            "B": 200, "nested_b": 60, "seed": SEED, "fold_seed": 42,
+            "e6p_B": 150}
+    with contextlib.redirect_stdout(io.StringIO()):
+        write_followup(fu["dl21"], "dl21", out, meta)
+    js = json.loads((out / "derived" / "batch6_followup_dl21.json").read_text())
+    texs = sorted((out / "derived" / "tex").glob("batch6_followup_dl21_*.tex"))
+    csv = pd.read_csv(out / "derived" / "batch6_opcurve_dl21_stub_noisy.csv")
+    check("follow-up writers: JSON (EXPLORATORY meta), 5 tex tables, opcurve CSV",
+          js["meta"]["status"] == EXPLORATORY and js["meta"]["pre_registered"]
+          is False and len(texs) == 5
+          and all(t.read_text().startswith(f"% [{EXPLORATORY}]") for t in texs)
+          and len(csv) == (3 * 3 + 2) + len(COMBOS) + 6
+          and csv["tag"].fillna("").str.contains("FROZEN").any(),
+          f"{len(csv)} csv rows")
+    ns = argparse.Namespace(datasets="dl22", unseal_dl22=False,
+                            data_dir=str(root / "nowhere"))
+    try:
+        cmd_followup(ns)
+        check("follow-up: dl22 refused without --unseal-dl22", False)
+    except SystemExit as e:
+        check("follow-up: dl22 refused without --unseal-dl22",
+              "SEALED" in str(e.code))
 
 
 def cmd_selftest(args) -> None:
@@ -2352,6 +3691,9 @@ def cmd_selftest(args) -> None:
               f"labels file {labs[0].name if labs else None}, "
               f"{0 if lab_df is None else len(lab_df)} rows")
 
+        # 13. follow-up subcommand (exploratory)
+        selftest_followup(check, df, qrels, rules, root, R)
+
     if args.keep_dir:
         kd = Path(args.keep_dir)
         write_stub_dir(kd)
@@ -2427,6 +3769,23 @@ def main() -> None:
     p = sub.add_parser("paste", help="print the B6 registration block (blind)")
     common(p, "dl22,dl21,antique")
     p.set_defaults(func=cmd_paste)
+
+    p = sub.add_parser("followup", help=f"{EXPLORATORY}: factorial, "
+                       "operating curve, F1-objective refit + nested "
+                       "bootstrap, E6' query-count sample efficiency")
+    common(p, "dl21,antique")
+    data_opts(p)
+    p.add_argument("--unseal-dl22", action="store_true",
+                   help="required for dl22 (sealed holdout)")
+    p.add_argument("--b", type=int, default=B_BOOT,
+                   help="evaluation-only query-bootstrap replicates")
+    p.add_argument("--nested-b", type=int, default=NESTED_B,
+                   help="nested (fit-aware) bootstrap replicates; 0 = skip")
+    p.add_argument("--e6p-b", type=int, default=E6P_B,
+                   help="E6' draws per calibration-query count")
+    p.add_argument("--q-sizes", default=",".join(map(str, E6P_SIZES)),
+                   help="E6' calibration query counts ('' = skip E6')")
+    p.set_defaults(func=cmd_followup)
 
     p = sub.add_parser("selftest", help="synthetic stub drive (offline)")
     p.add_argument("--keep-dir", default=None,
