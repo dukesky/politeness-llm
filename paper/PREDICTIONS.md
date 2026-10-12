@@ -713,3 +713,179 @@ stdout 存档 derived/eval_batch5_stdout.txt，tex batch5_system_ranking.tex）�
   NDCG 拉回人类 ±0.01 内；v4.1/3.5 出现过校正（低于人类 0.04~0.08）。
   τ 的 bootstrap CI 全部很宽（13 系统池），任何 Δτ 都不显著——
   按预注册第 1 条的池同质性 caveat 如实报告。
+
+# B6 预注册 — 标注池扩充（batch6，scripts/batch6_poolext.py）
+
+登记时间：2026-10-12。分析代码 git hash：a52b5a4。
+rules_sha256: c93876126540819780ed59f36ed1afd298594b4309b9a77376ff8b01c6417293
+冻结规则文件：correction_rules.json（git 446927c，时间戳 2026-09-15T05:19:47Z）；run 时 sha256 不符即中止。
+分析：`run` 子命令。pair universe = human-judged ∩ judge 在 L1–L5 均有可用标签（parse_ok & 数值 score）；
+标签 = 该档全部记录（paraphrase×run）的均值后 round-half-up（文中"paraphrase-mean"即此记录均值；设计平衡时与先按 paraphrase 取均值再平均完全相同）。RAW = L3；CORR-FROZEN = 家族冻结规则（dl21/dl22 用 msmarco，antique 用 antique；dial 档 + monotone map 逐记录施加于取均值之前）；
+CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qid) 分折；主 fold seed 42，稳健性 seeds [43, 44, 45, 46] 仅报告不计分；dial = argmin|Δ+D(ℓ)|，map = 35 个单调映射中训练折 paraphrase-mean 线性 κ 最大者，均为 batch4 估计量），测试折拼接。
+不确定性：query-clustered bootstrap B=1000 seed 42，90% 百分位 CI；差值为同一重采样 query 集上的配对差。REFIT 的 CI：evaluation-only bootstrap; fit variability shown by fold-seed spread。
+样本效率（E6）：n ∈ [50, 100, 200, 400]，B=1000 次 query 不放回抽样，校准集与扩充池 query-disjoint。
+判定纪律（逐字；代码在 BACKFILL 中同文打印）：
+1. 方向一律按点估计判定。tie 带为代码硬编码常量：TIE_F1 = 0.005（作用于 E3/E4 的 ΔF1@2、E5 的 ΔP@2 或 ΔR@2、E6 的差额）；TIE_RATIO = 0.02（作用于 E1 的 |ratio−1| 与 E2 的 |ratio−1| 变化量）。
+2. tie 既不计命中也不计未中（与此前各轮相同）。
+3. "≥0" 型预测（E3/E4/E5/E6）：预测"是"时，Δ > +TIE 记命中，Δ < −TIE 记未中，否则 tie；预测"否"时方向相反。
+4. E1：RAW ratio@≥2 点估计落在 [1−TIE_RATIO, 1+TIE_RATIO] 内一律记 tie，不看 CI；否则点估计方向与预测（>1 / <1）一致记命中，相反记未中。
+5. E2：变化量 = |r_FROZEN−1| − |r_RAW−1|。预测"是"（收缩）时 < −TIE_RATIO 记命中，> +TIE_RATIO 记未中，否则 tie；预测"否"时方向相反。
+6. 90% CI 排除 0（E1 为排除 1）单独报告为"显著"，永不改变命中/未中判定。
+7. 合取单元 = (judge, 数据集)：单元内每个适用且已登记的终点均命中 → 单元合取命中；任一未中 → 单元未中；无未中但有已登记终点无法判定（如 E6 未运行） → 单元 not adjudicated；否则有 tie → 单元 tie。被跳过/报错的单元记 not adjudicated，不计分。
+8. E5：冻结规则 delta_hat < 0 的单元（严域）判定 R@2(REFIT) − R@2(RAW) ≥ 0；delta_hat ≥ 0 的单元（宽域）判定 P@2(REFIT) − P@2(RAW) ≥ 0。
+9. E6：Δ = mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400（扩充池上的配对差），按第 3 条判定；仅当 n=200 与 n=400 均有成功抽样时判定，否则 not adjudicated。
+10. E3/E4/E5 使用主 fold seed（42）的 CORR-REFIT；其余 fold seeds 只作稳健性报告，不计分。REFIT 的 CI：evaluation-only bootstrap; fit variability shown by fold-seed spread。
+填写格式：把每条终点行末"预测："之后的占位替换为 >1 或 <1（E1），是 或 否（E2–E6）；同一 token 后不得紧接其他文字（如需说明，空格后写）。块内任何占位未填，dl22 门控即拒绝运行。
+盲态声明：blind — 登记前未在任何数据集上运行 `run`；`validate` 仅输出计数与覆盖（无一致性指标）；`paste` 仅读规则文件。预测逻辑：宽域（Δ>0）judge 的 RAW 相关集偏多（E1 >1），冻结规则的 dial 换档使相关率向 1 收敛（E2 是，map [0,0,2,3] 不改变 ≥2 集合、收敛全靠 dial；dial=L3 的 antique v4-flash 结构上无变化，预期 tie）；域内重拟合 F1 ≥ RAW（E3 是）；重拟合 ≥ 冻结 在 held-out/部分 in-sample 的 msmarco 规则上成立（E4 是），但 antique 冻结规则本身完全 in-sample，预期冻结 ≥ 重拟合（E4 否）；宽域 precision 升、严域 recall 升（E5 是）；n=200 已达 n=400 收益的 80%（E6 是，C1 结论延伸）。预期 3.8-flash（漂移阶梯平坦、map 由 κ 选择）多为 tie。
+
+## dl22 — held-out（冻结 msmarco 规则未见 dl22）
+### deepseek/deepseek-v4-flash — dl22 — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.5561（E5 宽域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### deepseek/deepseek-v4.1-flash — dl22 — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.5005（E5 宽域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### google/gemini-3.5-flash — dl22 — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.4714（E5 宽域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### google/gemini-3.8-flash — dl22 — 冻结规则 dial=L3 map=[0, 1, 2, 3]，delta_hat=+0.3802（E5 宽域）（identity@L3 → no-op 对照）
+- B6-E0 [no-op] CORR-FROZEN ≡ RAW 全终点逐位相同（结构性不变量，代码 hard-fail 强制）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
+- B6-E2 [ratio convergence] N/A（结构性：FROZEN ≡ RAW）
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] ≡ B6-E3（FROZEN ≡ RAW），不单独计分
+- B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### anthropic/claude-opus-5 — dl22（40% 冻结子样本） — 冻结规则 dial=L2 map=[0, 0, 2, 3]，delta_hat=+0.4155（E5 宽域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### openai/gpt-5.6-sol — dl22（40% 冻结子样本） — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.5716（E5 宽域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+## dl21 — 冻结规则部分 in-sample（msmarco 规则拟合于 dl19+dl20+dl21）
+### deepseek/deepseek-v4-flash — dl21 — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.5561（E5 宽域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### deepseek/deepseek-v4.1-flash — dl21 — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.5005（E5 宽域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### google/gemini-3.5-flash — dl21 — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.4714（E5 宽域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### google/gemini-3.8-flash — dl21 — 冻结规则 dial=L3 map=[0, 1, 2, 3]，delta_hat=+0.3802（E5 宽域）（identity@L3 → no-op 对照）
+- B6-E0 [no-op] CORR-FROZEN ≡ RAW 全终点逐位相同（结构性不变量，代码 hard-fail 强制）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
+- B6-E2 [ratio convergence] N/A（结构性：FROZEN ≡ RAW）
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] ≡ B6-E3（FROZEN ≡ RAW），不单独计分
+- B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### anthropic/claude-opus-5 — dl21（40% 冻结子样本） — 冻结规则 dial=L2 map=[0, 0, 2, 3]，delta_hat=+0.4155（E5 宽域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### openai/gpt-5.6-sol — dl21（40% 冻结子样本） — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.5716（E5 宽域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+## antique — 冻结规则完全 in-sample（antique 规则拟合于 antique 本身）
+### deepseek/deepseek-v4-flash — antique — 冻结规则 dial=L3 map=[0, 1, 3, 3]，delta_hat=-0.3997（E5 严域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：<1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：否
+- B6-E5 [recall direction @≥2] 严域：R@2（recall）(CORR-REFIT) − R@2（recall）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### deepseek/deepseek-v4.1-flash — antique — 冻结规则 dial=L4 map=[0, 1, 3, 3]，delta_hat=-0.2793（E5 严域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：<1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：否
+- B6-E5 [recall direction @≥2] 严域：R@2（recall）(CORR-REFIT) − R@2（recall）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### google/gemini-3.5-flash — antique — 冻结规则 dial=L2 map=[0, 1, 3, 3]，delta_hat=-0.3288（E5 严域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：<1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：否
+- B6-E5 [recall direction @≥2] 严域：R@2（recall）(CORR-REFIT) − R@2（recall）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### google/gemini-3.8-flash — antique — 冻结规则 dial=L1 map=[0, 1, 3, 3]，delta_hat=-0.3308（E5 严域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：<1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：否
+- B6-E5 [recall direction @≥2] 严域：R@2（recall）(CORR-REFIT) − R@2（recall）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### anthropic/claude-opus-5 — antique（40% 冻结子样本） — 冻结规则 dial=L5 map=[0, 1, 2, 3]，delta_hat=-0.3379（E5 严域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：<1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：否
+- B6-E5 [recall direction @≥2] 严域：R@2（recall）(CORR-REFIT) − R@2（recall）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+### openai/gpt-5.6-sol — antique（40% 冻结子样本） — 冻结规则 dial=L2 map=[0, 1, 2, 3]，delta_hat=-0.1610（E5 严域）
+- B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：<1
+- B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
+- B6-E3 [F1 refit≥raw] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E4 [F1 refit≥frozen] F1@≥2(CORR-REFIT, fold seed 42) − F1@≥2(CORR-FROZEN) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：否
+- B6-E5 [recall direction @≥2] 严域：R@2（recall）(CORR-REFIT) − R@2（recall）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
+- B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
+- 开箱结果（run 后回填）：
+
+合计可判定终点：106（含结构性 no-op 断言 E0）。
