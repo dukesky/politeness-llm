@@ -1134,3 +1134,61 @@ ECE；round-half-up 后 ≥2 的二值 P/R/F1 与相关率比。query-clustered 
   （人类标签在排序上不劣于 LLM 标签；若 LLM 标签学生更好则为值得报告的意外）。
 - B7-P8 [副 arm 一致性] 以上 P1/P2/P5 在 msmarco-ce 上同向（稳健性，不计分）。
 开箱结果（evaluate/compare 后回填）：
+开箱结果（2026-10-12，evaluate/compare 于登记 commit 93e8b5e 之后；代码 cfecebe；144 个学生（2 arm × 3 judge × 8 集 × 3 seed）全部评测；
+dl22 universe 2146 对 / 76 query，所有结果文件 universe sha e63c9a7096e5 一致；汇总与裁决由 scripts/batch7_summary.py（81ecdb8，仅报告）生成，
+数值全部来自 derived/batch7/eval/*.json 与 compare_*.json；* = 90% 配对 query bootstrap CI 排除 0，仅单列不改判定）：
+
+**arm minilm-raw（主 arm，计分）** — 各标签集学生三 seed 均值（NDCG@10 / 均值偏移 / F1@2 / ratio@2 / mean_pred）：
+- v4-flash: HUMAN 0.4441/-0.065/0.205/0.69/0.61; RAW 0.4589/+0.553/0.273/2.00/1.23; CORR_FROZEN 0.4386/-0.131/0.180/0.71/0.55; CORR_REFIT 0.4291/-0.120/0.182/0.66/0.56; MIX_200 0.4532/+0.531/0.276/2.00/1.21; MIX_1000 0.4529/+0.465/0.247/1.81/1.14; CORR_REFIT_n200 0.4400/+0.172/0.163/0.58/0.85; CORR_REFIT_n1000 0.4261/-0.243/0.134/0.41/0.44
+- 3.5-flash: HUMAN 0.4441/-0.065/0.204/0.68/0.61; RAW 0.4601/+0.453/0.254/1.45/1.13; CORR_FROZEN 0.4432/-0.215/0.183/0.63/0.46; CORR_REFIT 0.4436/-0.215/0.183/0.63/0.46; MIX_200 0.4523/+0.442/0.250/1.47/1.12; MIX_1000 0.4608/+0.405/0.241/1.50/1.08; CORR_REFIT_n200 0.4417/-0.282/0.151/0.49/0.40; CORR_REFIT_n1000 0.4416/-0.164/0.186/0.73/0.51
+- 3.8-flash: HUMAN 0.4377/+0.069/0.128/0.52/0.75; RAW 0.4601/+0.505/0.253/1.84/1.18; CORR_FROZEN 0.4601/+0.505/0.253/1.84/1.18; CORR_REFIT 0.4420/+0.176/0.212/1.18/0.85; MIX_200 0.4572/+0.419/0.247/1.39/1.10; MIX_1000 0.4387/+0.152/0.178/0.66/0.83; CORR_REFIT_n200 0.4490/+0.412/0.223/1.27/1.09; CORR_REFIT_n1000 0.4652/+0.512/0.269/1.93/1.19
+
+- B7-P1 v4-flash [minilm-raw] offset(RAW)−offset(HUMAN) = +0.6179 [+0.562,+0.673]* → HIT
+- B7-P2 v4-flash [minilm-raw] |offset(FROZEN)−offset(HUMAN)| 0.0658 vs |offset(RAW)−offset(HUMAN)| 0.6179（FROZEN−HUMAN offset -0.0658 [-0.131,+0.000]）→ HIT
+- B7-P3 v4-flash [minilm-raw] ΔNDCG@10 FROZEN−RAW = -0.0203 [-0.042,+0.001]，|Δ|>0.01 → MISS；TOST：equivalence within ±0.01 NOT shown (90% CI not inside the margin)
+- B7-P4 v4-flash [minilm-raw] ΔF1@2 FROZEN−RAW = -0.0928 [-0.157,-0.034]* → MISS
+- B7-P5 v4-flash [minilm-raw] |ratio@2−1| FROZEN 0.2937 vs RAW 1.0041（Δratio FROZEN−RAW -1.2978 [-1.620,-1.013]*）→ HIT
+- B7-P6-n1000 v4-flash [minilm-raw] |offset dev| REFIT_n1000 0.1774 vs MIX_1000 0.5299（Δoffset -0.7073 [-0.775,-0.634]*；ΔNDCG@10 -0.0268 [-0.050,-0.001]*；ΔF1@2 -0.1125 [-0.185,-0.042]* no call）→ HIT
+- B7-P6-n200 v4-flash [minilm-raw] |offset dev| REFIT_n200 0.2368 vs MIX_200 0.5959（Δoffset -0.3591 [-0.402,-0.314]*；ΔNDCG@10 -0.0132 [-0.031,+0.005]；ΔF1@2 -0.1125 [-0.190,-0.043]* no call）→ HIT
+- B7-P7 v4-flash [minilm-raw] ΔNDCG@10 HUMAN−RAW = -0.0147 [-0.045,+0.016] → MISS（登记为『值得报告的意外』：LLM 标签学生排序不劣于人类标签学生）
+- B7-P1 3.5-flash [minilm-raw] offset(RAW)−offset(HUMAN) = +0.5178 [+0.473,+0.564]* → HIT
+- B7-P2 3.5-flash [minilm-raw] |offset(FROZEN)−offset(HUMAN)| 0.1502 vs |offset(RAW)−offset(HUMAN)| 0.5178（FROZEN−HUMAN offset -0.1502 [-0.209,-0.089]*）→ HIT
+- B7-P3 3.5-flash [minilm-raw] ΔNDCG@10 FROZEN−RAW = -0.0169 [-0.033,-0.000]*，|Δ|>0.01 → MISS；TOST：equivalence within ±0.01 NOT shown (90% CI not inside the margin)
+- B7-P4 3.5-flash [minilm-raw] ΔF1@2 FROZEN−RAW = -0.0708 [-0.123,-0.024]* → no call（登记）
+- B7-P5 3.5-flash [minilm-raw] |ratio@2−1| FROZEN 0.3679 vs RAW 0.4492（Δratio FROZEN−RAW -0.8171 [-1.045,-0.618]*）→ HIT
+- B7-P6-n1000 3.5-flash [minilm-raw] |offset dev| REFIT_n1000 0.0989 vs MIX_1000 0.4699（Δoffset -0.5689 [-0.630,-0.506]*；ΔNDCG@10 -0.0192 [-0.042,+0.003]；ΔF1@2 -0.0547 [-0.100,-0.011]* no call）→ HIT
+- B7-P6-n200 3.5-flash [minilm-raw] |offset dev| REFIT_n200 0.2167 vs MIX_200 0.5072（Δoffset -0.7238 [-0.770,-0.672]*；ΔNDCG@10 -0.0106 [-0.031,+0.011]；ΔF1@2 -0.0993 [-0.159,-0.043]* no call）→ HIT
+- B7-P7 3.5-flash [minilm-raw] ΔNDCG@10 HUMAN−RAW = -0.0160 [-0.044,+0.015] → MISS（登记为『值得报告的意外』：LLM 标签学生排序不劣于人类标签学生）
+- B7-P1 3.8-flash [minilm-raw] offset(RAW)−offset(HUMAN) = +0.4358 [+0.393,+0.477]* → HIT
+- B7-P2 3.8-flash [minilm-raw] no-op 不变量：ΔNDCG@10 FROZEN−RAW = +0.0000，Δoffset = +0.0001 → N/A（标签逐位相同；学生非逐位相同——训练存在不确定性——但差异为 1e-4 量级、在 tie 带内，不变量成立）
+
+**arm msmarco-ce（副 arm，稳健性，不计分）** — 各标签集学生三 seed 均值（NDCG@10 / 均值偏移 / F1@2 / ratio@2 / mean_pred）：
+- v4-flash: HUMAN 0.7464/+0.063/0.494/1.17/0.74; RAW 0.7556/+0.587/0.478/2.30/1.27; CORR_FROZEN 0.7399/-0.031/0.483/1.20/0.65; CORR_REFIT 0.7376/+0.021/0.482/1.33/0.70; MIX_200 0.7599/+0.565/0.477/2.27/1.24; MIX_1000 0.7637/+0.489/0.475/2.01/1.17; CORR_REFIT_n200 0.7468/+0.184/0.450/0.87/0.86; CORR_REFIT_n1000 0.7282/-0.217/0.415/0.73/0.46
+- 3.5-flash: HUMAN 0.7464/+0.063/0.494/1.17/0.74; RAW 0.7673/+0.452/0.492/1.52/1.13; CORR_FROZEN 0.7366/-0.148/0.478/1.05/0.53; CORR_REFIT 0.7362/-0.148/0.478/1.05/0.53; MIX_200 0.7670/+0.437/0.490/1.52/1.11; MIX_1000 0.7710/+0.379/0.494/1.50/1.06; CORR_REFIT_n200 0.7437/-0.232/0.455/0.85/0.45; CORR_REFIT_n1000 0.7440/-0.086/0.488/1.18/0.59
+- 3.8-flash: HUMAN 0.7467/+0.276/0.450/1.22/0.95; RAW 0.7561/+0.562/0.463/2.02/1.24; CORR_FROZEN 0.7561/+0.562/0.463/2.02/1.24; CORR_REFIT 0.7533/+0.336/0.473/1.57/1.01; MIX_200 0.7589/+0.502/0.479/1.82/1.18; MIX_1000 0.7614/+0.374/0.479/1.48/1.05; CORR_REFIT_n200 0.7572/+0.483/0.481/1.74/1.16; CORR_REFIT_n1000 0.7563/+0.579/0.463/2.08/1.26
+
+- B7-P1 v4-flash [msmarco-ce] offset(RAW)−offset(HUMAN) = +0.5247 [+0.488,+0.563]* → HIT
+- B7-P2 v4-flash [msmarco-ce] |offset(FROZEN)−offset(HUMAN)| 0.0941 vs |offset(RAW)−offset(HUMAN)| 0.5247（FROZEN−HUMAN offset -0.0941 [-0.137,-0.046]*）→ HIT
+- B7-P3 v4-flash [msmarco-ce] ΔNDCG@10 FROZEN−RAW = -0.0157 [-0.031,-0.001]*，|Δ|>0.01 → MISS；TOST：equivalence within ±0.01 NOT shown (90% CI not inside the margin)
+- B7-P4 v4-flash [msmarco-ce] ΔF1@2 FROZEN−RAW = +0.0055 [-0.042,+0.043] → HIT
+- B7-P5 v4-flash [msmarco-ce] |ratio@2−1| FROZEN 0.2002 vs RAW 1.3018（Δratio FROZEN−RAW -1.1016 [-1.356,-0.891]*）→ HIT
+- B7-P6-n1000 v4-flash [msmarco-ce] |offset dev| REFIT_n1000 0.2792 vs MIX_1000 0.4269（Δoffset -0.7061 [-0.759,-0.650]*；ΔNDCG@10 -0.0355 [-0.049,-0.023]*；ΔF1@2 -0.0599 [-0.136,+0.009] no call）→ HIT
+- B7-P6-n200 v4-flash [msmarco-ce] |offset dev| REFIT_n200 0.1211 vs MIX_200 0.5028（Δoffset -0.3817 [-0.418,-0.345]*；ΔNDCG@10 -0.0130 [-0.032,+0.006]；ΔF1@2 -0.0275 [-0.098,+0.037] no call）→ HIT
+- B7-P7 v4-flash [msmarco-ce] ΔNDCG@10 HUMAN−RAW = -0.0092 [-0.024,+0.004] → MISS（登记为『值得报告的意外』：LLM 标签学生排序不劣于人类标签学生）
+- B7-P1 3.5-flash [msmarco-ce] offset(RAW)−offset(HUMAN) = +0.3893 [+0.367,+0.412]* → HIT
+- B7-P2 3.5-flash [msmarco-ce] |offset(FROZEN)−offset(HUMAN)| 0.2106 vs |offset(RAW)−offset(HUMAN)| 0.3893（FROZEN−HUMAN offset -0.2106 [-0.252,-0.167]*）→ HIT
+- B7-P3 3.5-flash [msmarco-ce] ΔNDCG@10 FROZEN−RAW = -0.0307 [-0.046,-0.015]*，|Δ|>0.01 → MISS；TOST：equivalence within ±0.01 NOT shown (90% CI not inside the margin)
+- B7-P4 3.5-flash [msmarco-ce] ΔF1@2 FROZEN−RAW = -0.0136 [-0.044,+0.012] → no call（登记）
+- B7-P5 3.5-flash [msmarco-ce] |ratio@2−1| FROZEN 0.0518 vs RAW 0.5203（Δratio FROZEN−RAW -0.4685 [-0.570,-0.377]*）→ HIT
+- B7-P6-n1000 3.5-flash [msmarco-ce] |offset dev| REFIT_n1000 0.1487 vs MIX_1000 0.3161（Δoffset -0.4648 [-0.505,-0.420]*；ΔNDCG@10 -0.0270 [-0.043,-0.010]*；ΔF1@2 -0.0063 [-0.029,+0.012] no call）→ HIT
+- B7-P6-n200 3.5-flash [msmarco-ce] |offset dev| REFIT_n200 0.2944 vs MIX_200 0.3742（Δoffset -0.6686 [-0.702,-0.631]*；ΔNDCG@10 -0.0232 [-0.037,-0.010]*；ΔF1@2 -0.0350 [-0.083,+0.006] no call）→ HIT
+- B7-P7 3.5-flash [msmarco-ce] ΔNDCG@10 HUMAN−RAW = -0.0209 [-0.039,-0.003]* → MISS（登记为『值得报告的意外』：LLM 标签学生排序不劣于人类标签学生）
+- B7-P1 3.8-flash [msmarco-ce] offset(RAW)−offset(HUMAN) = +0.2862 [+0.265,+0.307]* → HIT
+- B7-P2 3.8-flash [msmarco-ce] no-op 不变量：ΔNDCG@10 FROZEN−RAW = +0.0000，Δoffset = -0.0000 → N/A（标签逐位相同；学生非逐位相同——训练存在不确定性——但差异为 1e-4 量级、在 tie 带内，不变量成立）
+
+**主 arm 计分：HIT 11 / MISS 5 / tie 0**（P1 3/3、P2 2/2（3.8 不变量 N/A）、P3 0/2、P4 0/1、P5 2/2、P6 4/4、P7 0/2）。
+**P8（副 arm 同向，不计分）**：P1/P2/P5 共 7 个可比单元全部同向；P3/P7 在副 arm 同样未中（ΔNDCG@10 FROZEN−RAW −0.016/−0.031，HUMAN−RAW −0.009/−0.021）；P4 副 arm v4-flash +0.0055（主 arm −0.093）。
+**主 agent 初步解读（待评估员复核）**：登记的『排序≈不变、绝对量改善』只有后半成立——学生确实继承判官工作点（RAW 学生 offset 高于 HUMAN 学生 +0.44~+0.62），
+校正标签把学生拉回人类尺度（FROZEN 学生与 HUMAN 学生 offset 差 0.07~0.15，3.5-flash 过校正至 −0.215）且等预算下优于混入人类标注；但排序**不是**不变：校正标签学生 NDCG@10 低于 RAW 标签学生 0.016~0.031（多数 CI 排除 0），
+而 HUMAN 标签学生本身也低于 RAW 标签学生 0.009~0.022（CI 多含 0）；阈值 F1@2 在主 arm 对所有低均值标签集（含 HUMAN）塌缩（recall 0.10~0.17 vs RAW 0.31~0.41），
+更像回归学生向标签均值收缩后 round-half-up≥2 的阈值效应而非标签工作点本身（副 arm 各集 F1 均 ≈0.45~0.49）。
