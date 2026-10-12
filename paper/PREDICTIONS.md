@@ -1078,6 +1078,16 @@ dial+map 规则在 15/16 适用单元收缩 |ratio@2−1|，MS MARCO 上约去�
 其余判断（dial 选择在 L1/L5 间双峰、冻结规则与小样本重拟合相当：mean REFIT−FROZEN ≈ −0.002）
 作为解读注记。
 
+## B6 探索性追加分析（followup cfecebe、followup2 e7068ff；非预注册；评估员 Sonnet 两轮复核，报告存内部 repo docs/evaluator_reports/2026-10-12_b6_followup*_sonnet.md）
+均为开箱后设计，不得作确认性检验；完整性：18/18 单元 universe 与登记 run 一致，登记数字复现到 0.0005。
+- **2×2 因子（dial×map 交叉拟合）**：F1@2 效应小（|FROZEN total|≤0.037）；dial/map 不可加——DeepSeek（MS MARCO）为替代（交互至 −0.035*），旗舰 dl22 为互补（主效应≈0、交互为正）；逐记录 map 承担多数 ratio 收缩（dl22 opus 70%）——支持并细化勘误，机制随 judge/数据集变化。REFIT 的归因在 8/18 单元结构性退化（交互恒 0）。
+- **运行曲线**：FROZEN:MAP 在 18/18 单元落在 L3 票和阈值曲线上（输出侧单调映射 = re-threshold）；只有 dial 在匹配 ratio 下高于曲线（5 个 MS MARCO 单元，antique 无；dl22 v4.1 的『高于』是弦插值伪影）；旗舰 dl22 只有 dial+map 联合高于曲线。原『in-sample 网格 F1 上限』不是上限（2 单元低于最佳 L3 阈值、4 单元被交叉拟合超过），已改名为乐观参照，『占上限比例』数字撤回。
+- **决定性基线（followup2）：交叉拟合单参数 re-threshold（RETHRESH_K/F1，同折）**：18 单元均值 F1 增益 RTK +0.0037 / RTF +0.0048 vs REFIT +0.0035 / F1REFIT +0.0053 / FROZEN +0.0050；各 arm 减基线均值在 −0.0002~+0.0013；逐单元 beats/within/below 6/6/6、8/4/6、7/5/6、6/5/7，且随 fold seed 变动（342 个单元-指标中 180 个带内翻转、20 个硬翻转）；fit-aware CI 排除 0 的 8/72 与 10% 水平的偶然数一致，且 B=200 的嵌套 CI 不对称（RETHRESH 在重采样中不稳），**不得引用为显著**。ANTIQUE：re-threshold 自身 +0.011/+0.014（五个 seed 同号），5/6 单元不低于最佳校正 arm；MS MARCO：re-threshold 均值≈0，仅高 ratio 的 DeepSeek 单元为正、dl22 3.8-flash 为负。剩余差距≤0.02 F1（DeepSeek MS MARCO 的 refit；held-out dl22 旗舰的冻结 dial+map +0.016/+0.019，同一规则在 3.5-flash −0.033）。校正相对 re-threshold 真正不同的是 **ratio 对齐**：MS MARCO 上去除 |ratio−1| 的比例 FROZEN 0.44、REFIT 0.29 vs RT 0.13–0.17（六记录票和有台阶，κ/F1 选的阈值到不了 ratio≈1）。dl21 的 RTK 因 53 query 的悬崖阈值不稳（seed 44 四个单元塌到 −0.059），dl21 任何 RTK 结论不可用。
+- **F1 目标重拟合**：F1REFIT−REFIT 五 seed 均值 +0.002~+0.006，逐单元为噪声（17/18 带内翻转）。
+- **E6'（横轴 query 数）**：κ 目标下 q=8 捕获 q=32 增益 ≥80% 仅 2/18（antique v4.1、3.8），F1 目标 1/18；均值被灾难 draw 主导；DeepSeek MS MARCO 单元约 q=16（≈450 对）后重拟合才平均不亏损（q=8 时 P(损失>0.05)=0.14/0.03/0.14/0.10），ANTIQUE 4–8 个 query；RAW 已近 F1 最优的 judge 任何 q≤32 都无增益（『保留 RAW』）。RAW 回退率很低（中位 0.014/0.038），DeepSeek 单元 ≤0.013——小 q 的灾难是真的坏规则；回退率只在 RAW 已最优处随 q 上升（dl22 3.8 κ 目标 q=32 时 0.80）。此指引针对 175 网格重拟合，单参数 re-threshold 未做 E6'。
+- **可写进论文（探索性标注）**：上述各条按评估员清单；**不得写**：校正优于 re-threshold / dial 或 map『携带超出 re-threshold 的信息』/ seed 稳健 / 『仅在 MS MARCO』对 refit arm 成立 / 任何 arm−RETHRESH 的显著性 / dl21 RTK / in-sample re-threshold 作基线 / F1 最优 ratio=1 / 『恢复或提升判断质量』/ 对数规则 / 回退率解释 antique 小 q 安全。
+- **评估员认为 F1-vs-re-threshold 问题已关闭**；可选后续（按价值）：以 ratio 为目标的 re-threshold 基线；对 RETHRESH_F1 做 E6'（若 2–4 个 query 即达增益，『约 16 query』指引应改为『只重拟合阈值』）；若引用区间需 B≥1000 居中区间；RTF 为主、RTK 限 |t−t_raw|≤3。
+
 # B7 预注册 — 蒸馏训练（batch7，scripts/batch7_distill.py）
 
 登记时间：2026-10-12。分析代码 git hash：a52b5a4（batch7_distill.py）。冻结规则文件同 B6
