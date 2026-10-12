@@ -1077,3 +1077,60 @@ dial+map 规则在 15/16 适用单元收缩 |ratio@2−1|，MS MARCO 上约去�
 关于标注量需求的证据仅限"≈28 对/query、≤14 query 时小样本重拟合中性到有害"。
 其余判断（dial 选择在 L1/L5 间双峰、冻结规则与小样本重拟合相当：mean REFIT−FROZEN ≈ −0.002）
 作为解读注记。
+
+# B7 预注册 — 蒸馏训练（batch7，scripts/batch7_distill.py）
+
+登记时间：2026-10-12。分析代码 git hash：a52b5a4（batch7_distill.py）。冻结规则文件同 B6
+（rules_sha256: c93876126540819780ed59f36ed1afd298594b4309b9a77376ff8b01c6417293）。
+训练池：dl19+dl20+dl21（v4-flash、gemini-3.5-flash：5049 对/150 query，覆盖人类标注 100%）；
+gemini-3.8-flash 仅 dl21（1551 对/53 query，round-2 judge）——只做 judge 内对比。测试：dl22
+人类 qrels（evaluate 以本标题行 + 干净已提交的 PREDICTIONS.md + --unseal-dl22 三重门控）。
+标签集（8，共用同一 universe）：HUMAN / RAW / CORR_FROZEN（训练池上 in-sample 的家族规则，
+非"导入"）/ CORR_REFIT（全预算 2 折交叉拟合，上界参照）/ MIX_200 / MIX_1000（整 query 抽取
+的人类标注 + 其余 RAW）/ CORR_REFIT_n200 / CORR_REFIT_n1000（等预算：规则只用对应 MIX 的
+人类 query 拟合）。
+标签集工作点（build-labels 盲态输出，Δ vs HUMAN，均值 0–3）：
+- v4-flash：RAW +0.578；FROZEN +0.053；REFIT +0.064；MIX_200 +0.556；REFIT_n200 +0.185
+  （map [0,1,1,3]）；MIX_1000 +0.455；REFIT_n1000 −0.157（map [0,0,1,3]，过校正）。
+- gemini-3.5-flash：RAW +0.476；FROZEN −0.066；REFIT −0.066（两折同规则）；MIX_200 +0.460；
+  REFIT_n200 −0.161；MIX_1000 +0.375；REFIT_n1000 +0.002。
+- gemini-3.8-flash（dl21）：RAW +0.386；FROZEN ≡ RAW（no-op，逐位相同）；REFIT +0.139
+  （两折 dial 不同 L4/L1）；MIX_200 +0.341；REFIT_n200 +0.189；MIX_1000 +0.150；REFIT_n1000 +0.390。
+模型与配方：主 arm minilm-raw = nreimers/MiniLM-L6-H384-uncased（无排序预训练）；副 arm
+msmarco-ce = cross-encoder/ms-marco-MiniLM-L6-v2（warm-start，有 MS MARCO 排序预训练，排序类
+终点信息量低）。两 arm 两 objective 统一重置输出头（权重 N(0,0.02)，回归 bias=1.5）；
+pointwise 回归 0–3（MSE）；`--select last`、固定 epoch；bs 32、max-len 256、AdamW wd 0.01、
+线性调度 10% warmup；seed×3；评分 fp32。超参由 HUMAN 集 sweep（训练池 10% query 验证，
+不碰 dl22）选定：**minilm-raw epochs=5 lr=3e-5（val loss 1.0266）；msmarco-ce epochs=3 lr=3e-5
+（val loss 0.8381）**。sweep 同时显示：两 arm 的 HUMAN 学生验证集预测均值高于标签均值
++0.19（minilm）/+0.26（msmarco-ce）——训练配方自带尺度偏移，故**绝对终点一律以同 arm 的
+HUMAN 学生为配方基线，登记量为 (指标_SET − 指标_HUMAN) 或集合间配对差**。
+评测：dl22 全部 judged pair（标准 NDCG@10，gain 2^rel−1，理想序列取该 query 全部人类标注；
+MAP@≥2；非 batch5 的 condensed 约定）；绝对：预测 clip 到 [0,3] 后的均值偏移、MAE、4 箱校准/
+ECE；round-half-up 后 ≥2 的二值 P/R/F1 与相关率比。query-clustered bootstrap B=1000 seed 42，
+90% CI；compare 为同重采样 query 上的配对差，三 seed 先各自聚合再取均值；TOST 等价 margin 0.01
+（dl22 ≈76 query 下 90% CI 半宽约 0.01，"inconclusive" 可能且**不等于伤害**）。
+判定纪律：方向按点估计（三 seed 均值）；tie 带：NDCG/MAP/F1 0.005，均值偏移/相关率比 0.02；
+90% CI 排除 0 单列为"显著"不改判定；tie 不计命中/未中；每条预测按 (judge, arm) 单元逐条打分，
+主 arm minilm-raw 计分，msmarco-ce 作稳健性报告。
+盲态声明：blind — 登记前未训练任何学生（sweep 仅在 HUMAN 集训练池上）、未评测任何 dl22。
+
+预测（主 arm minilm-raw；每条对 v4-flash 与 gemini-3.5-flash 各判一次，3.8-flash 仅标注处适用）：
+- B7-P1 [学生继承工作点] offset(RAW 学生) − offset(HUMAN 学生) > +0.02（宽判官标签把学生
+  推高）：v4-flash 是；3.5-flash 是；3.8-flash 是。
+- B7-P2 [校正标签把学生拉回] |offset(CORR_FROZEN 学生) − offset(HUMAN 学生)| <
+  |offset(RAW 学生) − offset(HUMAN 学生)|：v4-flash 是；3.5-flash 是；3.8-flash N/A（no-op，
+  结构性：CORR_FROZEN 学生与 RAW 学生逐位相同，作 pipeline 不变量断言）。
+- B7-P3 [排序基本不动] NDCG@10(CORR_FROZEN 学生) − NDCG@10(RAW 学生) 落在 ±0.01 内
+  （点估计）：v4-flash 是；3.5-flash 是。同时登记：TOST 可能 inconclusive。
+- B7-P4 [阈值 F1 仅强漂移判官受益] F1@2(CORR_FROZEN 学生) − F1@2(RAW 学生) ≥ 0：
+  v4-flash 是（A 中 ratio≥1.6 的单元才有 F1 收益）；3.5-flash **no call**（A 中 F1 混合）。
+- B7-P5 [相关率比向 1 收敛] |ratio@2(CORR_FROZEN 学生) − 1| < |ratio@2(RAW 学生) − 1|：
+  v4-flash 是；3.5-flash 是。
+- B7-P6 [等预算：校正优于混入] |offset(CORR_REFIT_n1000 学生) − offset(HUMAN 学生)| <
+  |offset(MIX_1000 学生) − offset(HUMAN 学生)|：v4-flash 是；3.5-flash 是。
+  n200 版同向：v4-flash 是；3.5-flash 是。F1@2 的等预算对比：no call（A 的 E6 教训）。
+- B7-P7 [HUMAN 上界] NDCG@10(HUMAN 学生) ≥ NDCG@10(RAW 学生) − 0.005：v4-flash 是；3.5-flash 是
+  （人类标签在排序上不劣于 LLM 标签；若 LLM 标签学生更好则为值得报告的意外）。
+- B7-P8 [副 arm 一致性] 以上 P1/P2/P5 在 msmarco-ce 上同向（稳健性，不计分）。
+开箱结果（evaluate/compare 后回填）：
