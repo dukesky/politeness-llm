@@ -747,6 +747,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 1.8506 [+1.5702,+2.1473] pred=>1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.4482 [-0.6000,-0.3046] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = +0.0233 [-0.0066,+0.0525] pred=是 -> HIT not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = +0.0120 [-0.0096,+0.0344] pred=是 -> HIT not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 P@2 REFIT-RAW (lenient domain) = +0.0380 [+0.0061,+0.0696] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = -0.0256 pred=是 -> MISS
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW +0.0255+-0.0048 [+0.0200,+0.0328]; dF1@2 REFIT-FROZEN +0.0141+-0.0048 [+0.0087,+0.0215]; dP@2 REFIT-RAW +0.0440+-0.0058 [+0.0380,+0.0517]
+  - => cell conjunction: MISS
 ### deepseek/deepseek-v4.1-flash — dl22 — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.5005（E5 宽域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -755,6 +763,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 1.7957 [+1.5377,+2.0673] pred=>1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.6768 [-0.8374,-0.4686] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = +0.0085 [-0.0276,+0.0427] pred=是 -> HIT not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = -0.0022 [-0.0138,+0.0093] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 P@2 REFIT-RAW (lenient domain) = +0.0862 [+0.0523,+0.1245] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = -0.0159 pred=是 -> MISS
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW +0.0065+-0.0031 [+0.0022,+0.0101]; dF1@2 REFIT-FROZEN -0.0043+-0.0031 [-0.0086,-0.0006]; dP@2 REFIT-RAW +0.0793+-0.0092 [+0.0635,+0.0862]
+  - => cell conjunction: MISS
 ### google/gemini-3.5-flash — dl22 — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.4714（E5 宽域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -763,6 +779,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 1.2073 [+0.9947,+1.4181] pred=>1 -> HIT not significant
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.1829 [-0.2922,+0.1752] pred=是 -> HIT not significant
+  - B6-E3 F1@2 REFIT-RAW = -0.0283 [-0.0515,-0.0087] pred=是 -> MISS significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = +0.0082 [-0.0101,+0.0291] pred=是 -> HIT not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 P@2 REFIT-RAW (lenient domain) = -0.0010 [-0.0262,+0.0189] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = -0.0171 pred=是 -> MISS
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW -0.0277+-0.0013 [-0.0283,-0.0254]; dF1@2 REFIT-FROZEN +0.0087+-0.0013 [+0.0082,+0.0110]; dP@2 REFIT-RAW +0.0022+-0.0072 [-0.0010,+0.0150]
+  - => cell conjunction: MISS
 ### google/gemini-3.8-flash — dl22 — 冻结规则 dial=L3 map=[0, 1, 2, 3]，delta_hat=+0.3802（E5 宽域）（identity@L3 → no-op 对照）
 - B6-E0 [no-op] CORR-FROZEN ≡ RAW 全终点逐位相同（结构性不变量，代码 hard-fail 强制）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
@@ -772,6 +796,13 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E0 CORR-FROZEN ≡ RAW bit-exactly (invariant passed) pred=structural -> HIT
+  - B6-E1 RAW ratio@>=2 = 1.0213 [+0.8382,+1.2088] pred=>1 -> HIT not significant
+  - B6-E3 F1@2 REFIT-RAW = +0.0000 [+0.0000,+0.0000] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 P@2 REFIT-RAW (lenient domain) = +0.0000 [+0.0000,+0.0000] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = -0.0120 pred=是 -> MISS
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW -0.0007+-0.0016 [-0.0036,+0.0000]; dF1@2 REFIT-FROZEN -0.0007+-0.0016 [-0.0036,+0.0000]; dP@2 REFIT-RAW +0.0029+-0.0065 [+0.0000,+0.0145]
+  - => cell conjunction: MISS
 ### anthropic/claude-opus-5 — dl22（40% 冻结子样本） — 冻结规则 dial=L2 map=[0, 0, 2, 3]，delta_hat=+0.4155（E5 宽域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -780,6 +811,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 1.3066 [+1.0975,+1.5449] pred=>1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.1679 [-0.2421,-0.0492] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = -0.0070 [-0.0234,+0.0071] pred=是 -> MISS not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = -0.0201 [-0.0422,+0.0029] pred=是 -> MISS not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 P@2 REFIT-RAW (lenient domain) = -0.0023 [-0.0144,+0.0094] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = -0.0126 pred=是 -> MISS
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW -0.0070+-0.0000 [-0.0070,-0.0070]; dF1@2 REFIT-FROZEN -0.0201+-0.0000 [-0.0201,-0.0201]; dP@2 REFIT-RAW -0.0023+-0.0000 [-0.0023,-0.0023]
+  - => cell conjunction: MISS
 ### openai/gpt-5.6-sol — dl22（40% 冻结子样本） — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.5716（E5 宽域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -788,6 +827,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 1.3212 [+1.1118,+1.5451] pred=>1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.1679 [-0.2406,-0.0594] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = -0.0043 [-0.0174,+0.0086] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = -0.0227 [-0.0470,-0.0020] pred=是 -> MISS significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 P@2 REFIT-RAW (lenient domain) = +0.0064 [-0.0055,+0.0209] pred=是 -> HIT not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = -0.0088 pred=是 -> MISS
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW -0.0054+-0.0030 [-0.0089,-0.0016]; dF1@2 REFIT-FROZEN -0.0239+-0.0030 [-0.0273,-0.0201]; dP@2 REFIT-RAW +0.0046+-0.0026 [+0.0005,+0.0064]
+  - => cell conjunction: MISS
 ## dl21 — 冻结规则部分 in-sample（msmarco 规则拟合于 dl19+dl20+dl21）
 ### deepseek/deepseek-v4-flash — dl21 — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.5561（E5 宽域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
@@ -797,6 +844,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 1.6461 [+1.4330,+1.9156] pred=>1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.2903 [-0.3647,-0.2274] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = +0.0110 [-0.0188,+0.0354] pred=是 -> HIT not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = -0.0048 [-0.0100,+0.0003] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 P@2 REFIT-RAW (lenient domain) = +0.0474 [+0.0264,+0.0695] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = -0.0183 pred=是 -> MISS
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW +0.0159+-0.0034 [+0.0110,+0.0208]; dF1@2 REFIT-FROZEN +0.0001+-0.0034 [-0.0048,+0.0050]; dP@2 REFIT-RAW +0.0468+-0.0050 [+0.0417,+0.0526]
+  - => cell conjunction: MISS
 ### deepseek/deepseek-v4.1-flash — dl21 — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.5005（E5 宽域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -805,6 +860,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 1.6004 [+1.3873,+1.8565] pred=>1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.3380 [-0.4239,-0.2645] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = +0.0291 [+0.0068,+0.0518] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = +0.0061 [-0.0004,+0.0136] pred=是 -> HIT not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 P@2 REFIT-RAW (lenient domain) = +0.0729 [+0.0516,+0.0981] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = -0.0154 pred=是 -> MISS
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW +0.0247+-0.0027 [+0.0227,+0.0291]; dF1@2 REFIT-FROZEN +0.0017+-0.0027 [-0.0003,+0.0061]; dP@2 REFIT-RAW +0.0741+-0.0038 [+0.0686,+0.0778]
+  - => cell conjunction: MISS
 ### google/gemini-3.5-flash — dl21 — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.4714（E5 宽域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -813,6 +876,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 1.3141 [+1.1218,+1.5587] pred=>1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.1630 [-0.2197,-0.0930] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = +0.0037 [-0.0145,+0.0187] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = +0.0044 [-0.0022,+0.0126] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 P@2 REFIT-RAW (lenient domain) = +0.0328 [+0.0184,+0.0477] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = -0.0107 pred=是 -> MISS
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW +0.0063+-0.0023 [+0.0037,+0.0080]; dF1@2 REFIT-FROZEN +0.0070+-0.0023 [+0.0044,+0.0087]; dP@2 REFIT-RAW +0.0308+-0.0026 [+0.0290,+0.0344]
+  - => cell conjunction: MISS
 ### google/gemini-3.8-flash — dl21 — 冻结规则 dial=L3 map=[0, 1, 2, 3]，delta_hat=+0.3802（E5 宽域）（identity@L3 → no-op 对照）
 - B6-E0 [no-op] CORR-FROZEN ≡ RAW 全终点逐位相同（结构性不变量，代码 hard-fail 强制）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
@@ -822,6 +893,13 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E0 CORR-FROZEN ≡ RAW bit-exactly (invariant passed) pred=structural -> HIT
+  - B6-E1 RAW ratio@>=2 = 1.2545 [+1.0848,+1.4535] pred=>1 -> HIT significant (90% CI excludes 1)
+  - B6-E3 F1@2 REFIT-RAW = -0.0099 [-0.0173,-0.0035] pred=是 -> MISS significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 P@2 REFIT-RAW (lenient domain) = -0.0071 [-0.0135,-0.0006] pred=是 -> MISS significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = -0.0133 pred=是 -> MISS
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW -0.0076+-0.0043 [-0.0128,-0.0026]; dF1@2 REFIT-FROZEN -0.0076+-0.0043 [-0.0128,-0.0026]; dP@2 REFIT-RAW -0.0071+-0.0030 [-0.0108,-0.0032]
+  - => cell conjunction: MISS
 ### anthropic/claude-opus-5 — dl21（40% 冻结子样本） — 冻结规则 dial=L2 map=[0, 0, 2, 3]，delta_hat=+0.4155（E5 宽域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -830,6 +908,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 1.3719 [+1.1706,+1.6112] pred=>1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.0804 [-0.1429,-0.0291] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = -0.0125 [-0.0325,+0.0070] pred=是 -> MISS not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = -0.0032 [-0.0176,+0.0099] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 P@2 REFIT-RAW (lenient domain) = +0.0034 [-0.0188,+0.0244] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = -0.0161 pred=是 -> MISS
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW -0.0381+-0.0382 [-0.0815,-0.0085]; dF1@2 REFIT-FROZEN -0.0287+-0.0382 [-0.0722,+0.0008]; dP@2 REFIT-RAW +0.0122+-0.0115 [+0.0034,+0.0278]
+  - => cell conjunction: MISS
 ### openai/gpt-5.6-sol — dl21（40% 冻结子样本） — 冻结规则 dial=L1 map=[0, 0, 2, 3]，delta_hat=+0.5716（E5 宽域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：>1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -838,6 +924,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 宽域：P@2（precision）(CORR-REFIT) − P@2（precision）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 1.4121 [+1.2099,+1.6548] pred=>1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.0653 [-0.1126,-0.0228] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = -0.0075 [-0.0219,+0.0059] pred=是 -> MISS not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = +0.0025 [-0.0043,+0.0105] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 P@2 REFIT-RAW (lenient domain) = +0.0020 [-0.0118,+0.0143] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = -0.0086 pred=是 -> MISS
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW -0.0128+-0.0210 [-0.0493,+0.0022]; dF1@2 REFIT-FROZEN -0.0029+-0.0210 [-0.0394,+0.0121]; dP@2 REFIT-RAW +0.0096+-0.0121 [+0.0020,+0.0309]
+  - => cell conjunction: MISS
 ## antique — 冻结规则完全 in-sample（antique 规则拟合于 antique 本身）
 ### deepseek/deepseek-v4-flash — antique — 冻结规则 dial=L3 map=[0, 1, 3, 3]，delta_hat=-0.3997（E5 严域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：<1
@@ -847,6 +941,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 严域：R@2（recall）(CORR-REFIT) − R@2（recall）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 0.7309 [+0.6895,+0.7709] pred=<1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.0356 [-0.0477,-0.0245] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = +0.0121 [+0.0052,+0.0197] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = +0.0000 [+0.0000,+0.0000] pred=否 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 R@2 REFIT-RAW (strict domain) = +0.0237 [+0.0154,+0.0331] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = +0.0004 pred=是 -> TIE
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW +0.0117+-0.0011 [+0.0097,+0.0121]; dF1@2 REFIT-FROZEN -0.0005+-0.0011 [-0.0024,+0.0000]; dR@2 REFIT-RAW +0.0240+-0.0006 [+0.0237,+0.0251]
+  - => cell conjunction: TIE
 ### deepseek/deepseek-v4.1-flash — antique — 冻结规则 dial=L4 map=[0, 1, 3, 3]，delta_hat=-0.2793（E5 严域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：<1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -855,6 +957,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 严域：R@2（recall）(CORR-REFIT) − R@2（recall）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 0.7546 [+0.7126,+0.7979] pred=<1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.0528 [-0.0675,-0.0370] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = +0.0137 [+0.0033,+0.0235] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = +0.0000 [+0.0000,+0.0000] pred=否 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 R@2 REFIT-RAW (strict domain) = +0.0317 [+0.0191,+0.0436] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = +0.0023 pred=是 -> TIE
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW +0.0130+-0.0014 [+0.0106,+0.0137]; dF1@2 REFIT-FROZEN -0.0006+-0.0014 [-0.0031,+0.0000]; dR@2 REFIT-RAW +0.0314+-0.0006 [+0.0303,+0.0317]
+  - => cell conjunction: TIE
 ### google/gemini-3.5-flash — antique — 冻结规则 dial=L2 map=[0, 1, 3, 3]，delta_hat=-0.3288（E5 严域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：<1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -863,6 +973,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 严域：R@2（recall）(CORR-REFIT) − R@2（recall）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 0.7183 [+0.6760,+0.7592] pred=<1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.0556 [-0.0745,-0.0375] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = +0.0015 [-0.0080,+0.0120] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = -0.0088 [-0.0148,-0.0034] pred=否 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 R@2 REFIT-RAW (strict domain) = +0.0132 [+0.0025,+0.0249] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = +0.0011 pred=是 -> TIE
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW +0.0013+-0.0036 [-0.0033,+0.0066]; dF1@2 REFIT-FROZEN -0.0090+-0.0036 [-0.0136,-0.0037]; dR@2 REFIT-RAW +0.0114+-0.0040 [+0.0066,+0.0172]
+  - => cell conjunction: TIE
 ### google/gemini-3.8-flash — antique — 冻结规则 dial=L1 map=[0, 1, 3, 3]，delta_hat=-0.3308（E5 严域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：<1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -871,6 +989,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 严域：R@2（recall）(CORR-REFIT) − R@2（recall）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 0.6900 [+0.6483,+0.7309] pred=<1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.0633 [-0.0794,-0.0472] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = +0.0140 [+0.0052,+0.0230] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = -0.0040 [-0.0090,+0.0008] pred=否 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 R@2 REFIT-RAW (strict domain) = +0.0290 [+0.0176,+0.0405] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = +0.0017 pred=是 -> TIE
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW +0.0110+-0.0036 [+0.0068,+0.0140]; dF1@2 REFIT-FROZEN -0.0070+-0.0036 [-0.0113,-0.0040]; dR@2 REFIT-RAW +0.0251+-0.0060 [+0.0185,+0.0303]
+  - => cell conjunction: TIE
 ### anthropic/claude-opus-5 — antique（40% 冻结子样本） — 冻结规则 dial=L5 map=[0, 1, 2, 3]，delta_hat=-0.3379（E5 严域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：<1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -879,6 +1005,14 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 严域：R@2（recall）(CORR-REFIT) − R@2（recall）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 0.7013 [+0.6424,+0.7583] pred=<1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.0235 [-0.0443,-0.0033] pred=是 -> HIT significant (90% CI excludes 0)
+  - B6-E3 F1@2 REFIT-RAW = +0.0211 [+0.0077,+0.0362] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = +0.0155 [+0.0033,+0.0285] pred=否 -> MISS significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 R@2 REFIT-RAW (strict domain) = +0.0369 [+0.0205,+0.0559] pred=是 -> HIT significant (90% CI excludes 0) (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = +0.0020 pred=是 -> TIE
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW +0.0104+-0.0088 [-0.0026,+0.0211]; dF1@2 REFIT-FROZEN +0.0048+-0.0088 [-0.0082,+0.0155]; dR@2 REFIT-RAW +0.0228+-0.0099 [+0.0101,+0.0369]
+  - => cell conjunction: MISS
 ### openai/gpt-5.6-sol — antique（40% 冻结子样本） — 冻结规则 dial=L2 map=[0, 1, 2, 3]，delta_hat=-0.1610（E5 严域）
 - B6-E1 [ratio direction] RAW 相关率比 @≥2（|LLM-rel|/|HUMAN-rel|），取值 >1 或 <1｜预测：<1
 - B6-E2 [ratio convergence] CORR-FROZEN 使 |ratio@≥2 − 1| 相对 RAW 收缩，取值 是/否｜预测：是
@@ -887,5 +1021,20 @@ CORR-REFIT = 同数据集 query-disjoint 2 折交叉拟合（md5(seed|dataset|qi
 - B6-E5 [recall direction @≥2] 严域：R@2（recall）(CORR-REFIT) − R@2（recall）(RAW) ≥ 0，取值 是/否（evaluation-only bootstrap; fit variability shown by fold-seed spread）｜预测：是
 - B6-E6 [sample efficiency] mean dF1@2(REFIT−RAW)@n=200 − 0.8 × mean dF1@2(REFIT−RAW)@n=400 ≥ 0，取值 是/否（需 --sample-efficiency；两档未都运行则 not adjudicated）｜预测：是
 - 开箱结果（run 后回填）：
+  - B6-E1 RAW ratio@>=2 = 0.8423 [+0.7770,+0.9065] pred=<1 -> HIT significant (90% CI excludes 1)
+  - B6-E2 |r_FROZEN-1| - |r_RAW-1| = -0.0134 [-0.0392,+0.0103] pred=是 -> TIE not significant
+  - B6-E3 F1@2 REFIT-RAW = -0.0054 [-0.0176,+0.0082] pred=是 -> MISS not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E4 F1@2 REFIT-FROZEN = +0.0000 [+0.0000,+0.0000] pred=否 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E5 R@2 REFIT-RAW (strict domain) = +0.0000 [-0.0140,+0.0166] pred=是 -> TIE not significant (evaluation-only bootstrap; fit variability shown by fold-seed spread)
+  - B6-E6 dF1@2(REFIT-RAW)@200 - 0.8 x @400 = +0.0004 pred=是 -> TIE
+  - fold-seed robustness [42, 43, 44, 45, 46] (not scored): dF1@2 REFIT-RAW -0.0041+-0.0028 [-0.0054,+0.0008]; dF1@2 REFIT-FROZEN +0.0012+-0.0028 [+0.0000,+0.0062]; dR@2 REFIT-RAW -0.0013+-0.0030 [-0.0067,+0.0000]
+  - => cell conjunction: MISS
 
 合计可判定终点：106（含结构性 no-op 断言 E0）。
+
+## B6 开箱汇总（2026-10-12，run 于登记 commit cd5544d 之后；代码 81112cc；rules sha256 校验通过；no-op 对照 2 单元逐位相同 OK）
+- dl22 tally — cells: {'miss': 6} registered endpoints: {'hit': 19, 'miss': 10, 'tie': 6}
+- dl21 tally — cells: {'miss': 6} registered endpoints: {'hit': 18, 'tie': 7, 'miss': 10}
+- antique tally — cells: {'tie': 4, 'miss': 2} registered endpoints: {'hit': 21, 'tie': 13, 'miss': 2}
+- 总计：registered endpoints hit 58 / miss 22 / tie 26（106）；合取单元 0 命中、14 未中、4 tie（E6 在 msmarco 全部未中拖垮合取）。
+- 诚实解读：方向性理论终点 E1（18/18）与 E2（16/16，msmarco 全部显著）几乎全中——原始标签把相关集按工作点方向系统性膨胀/收缩，冻结的均值对齐规则可迁移地消除大部分偏差（C4 结论在"标注池可用性"上的直接复现）。方法性能终点偏乐观：E3（refit F1≥RAW）7/6/5，E5（宽域 precision↑/严域 recall↑）强漂移判官显著 +0.03~+0.09、旗舰/温和判官 tie，E6（n=200 达 n=400 收益 80%）msmarco 0/16 未中、antique 全 tie。机制候选：κ 最优单调映射以 recall 换 precision，阈值 F1 不必然上升；小样本 map 重拟合在阈值 F1 上噪声大（待评估员复核）。进 Protocol 的两条候选修正：(a) 输出映射按下游目标（阈值 F1）而非 κ 拟合；(b) 输出映射样本需求（≥400 对）高于 dial（100–200 对），小样本阶段只做均值对齐/dial。
