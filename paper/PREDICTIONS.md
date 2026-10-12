@@ -1088,6 +1088,9 @@ dial+map 规则在 15/16 适用单元收缩 |ratio@2−1|，MS MARCO 上约去�
 - **可写进论文（探索性标注）**：上述各条按评估员清单；**不得写**：校正优于 re-threshold / dial 或 map『携带超出 re-threshold 的信息』/ seed 稳健 / 『仅在 MS MARCO』对 refit arm 成立 / 任何 arm−RETHRESH 的显著性 / dl21 RTK / in-sample re-threshold 作基线 / F1 最优 ratio=1 / 『恢复或提升判断质量』/ 对数规则 / 回退率解释 antique 小 q 安全。
 - **评估员认为 F1-vs-re-threshold 问题已关闭**；可选后续（按价值）：以 ratio 为目标的 re-threshold 基线；对 RETHRESH_F1 做 E6'（若 2–4 个 query 即达增益，『约 16 query』指引应改为『只重拟合阈值』）；若引用区间需 B≥1000 居中区间；RTF 为主、RTK 限 |t−t_raw|≤3。
 
+
+## B6 勘误（2026-10-12，评估员终审发现）
+『幅度更正』段落与『可安全写进论文的主张』中的 dl22 |ratio@2−1| 去除比例中位数应为 **0.55**（五个非 no-op 单元 0.53/0.85/0.88/0.55/0.52 的中位数），原写 0.53 有误；范围 0.52–0.88 不变。同段『MS MARCO ×1.2–1.85』应为『×1.02–1.85（除 dl22 gemini-3.8 的 1.02 外为 1.2–1.85）』。以上两处按只增不改约定在此勘误，不回改原文。
 # B7 预注册 — 蒸馏训练（batch7，scripts/batch7_distill.py）
 
 登记时间：2026-10-12。分析代码 git hash：a52b5a4（batch7_distill.py）。冻结规则文件同 B6
