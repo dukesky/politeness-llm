@@ -23,7 +23,11 @@ from pathlib import Path
 ARMS = ("minilm-raw", "msmarco-ce")
 MAIN_ARM = "minilm-raw"
 SETS = ("HUMAN", "RAW", "CORR_FROZEN", "CORR_REFIT", "MIX_200", "MIX_1000",
-        "CORR_REFIT_n200", "CORR_REFIT_n1000")
+        "CORR_REFIT_n200", "CORR_REFIT_n1000",
+        # EXPLORATORY ablations (build-ablation; not pre-registered)
+        "SHIFT_FULL", "SHIFT_n1000", "DIAL_ONLY", "MAP_ONLY")
+ABLATION_SHOW = ("RAW", "HUMAN", "CORR_FROZEN", "SHIFT_FULL", "SHIFT_n1000",
+                 "DIAL_ONLY", "MAP_ONLY")
 SHOW = ("ndcg10", "map", "offset", "mae", "f1", "precision", "recall",
         "rel_rate_ratio", "ece4", "mean_pred")
 TIE_RANK = 0.005      # NDCG / MAP / F1
@@ -255,6 +259,47 @@ def main() -> None:
             same = d[MAIN_ARM] == d["msmarco-ce"]
             print(f"    {pred} {j:<10} minilm-raw {d[MAIN_ARM]:<5} msmarco-ce {d['msmarco-ce']:<5} -> "
                   f"{'same' if same else 'DIFFERENT'}")
+
+    print_ablation(ev, cmp_)
+
+
+def print_ablation(ev: dict, cmp_: dict) -> None:
+    """EXPLORATORY ablation block (build-ablation sets; not pre-registered,
+    never adjudicated): level (SHIFT_*) vs label-side rule structure, and
+    dial (DIAL_ONLY) vs map (MAP_ONLY)."""
+    keys = ("ndcg10", "offset", "f1", "rel_rate_ratio")
+    if not any(s in sets for a in ev.values() for sets in a.values()
+               for s in ABLATION_SHOW[3:]):
+        return
+    print("\n" + "=" * 100 + "\n  ABLATION (exploratory; evaluator-requested, NOT pre-registered; "
+          "3-seed means, * = paired 90% CI excludes 0)\n" + "=" * 100)
+    for arm in ARMS:
+        for slug, sets in ev.get(arm, {}).items():
+            if not any(s in sets for s in ABLATION_SHOW[3:]):
+                continue
+            print(f"\n  [{arm}] {slug}")
+            print("  " + f"{'set':<14}" + "".join(f"{k:>16}" for k in ("NDCG@10", "offset", "F1@2", "ratio")))
+            for s in ABLATION_SHOW:
+                if s not in sets:
+                    print(f"  {s:<14}  (absent)")
+                    continue
+                n = len(sets[s])
+                print("  " + f"{s:<14}" + "".join(f"{seed_mean(sets[s], k)[0]:>+16.4f}" for k in keys)
+                      + ("" if n == 3 else f"   <-- only {n} seed(s)"))
+            cs = cmp_.get(arm, {}).get(slug, {})
+            rows = [(nm, r) for nm, r in cs.items()
+                    if all(x in ABLATION_SHOW for x in nm.split("_vs_"))
+                    and any(x in ABLATION_SHOW[3:] for x in nm.split("_vs_"))]
+            if rows:
+                print("    paired compares A - B:")
+            for nm, r in rows:
+                cells = []
+                for k in keys:
+                    e = r["endpoints"][k]
+                    lo, hi = e["ci90"]
+                    star = "*" if (lo > 0 or hi < 0) else " "
+                    cells.append(f"{e['diff']:+.4f}[{lo:+.3f},{hi:+.3f}]{star}")
+                print("    " + f"{nm:<30}" + "".join(f"{c:>26}" for c in cells))
 
 
 if __name__ == "__main__":

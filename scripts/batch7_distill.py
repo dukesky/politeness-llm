@@ -53,6 +53,20 @@ starts from a pre-trained score scale.  The registered epochs/lr are whatever
 Subcommands
 -----------
   build-labels  judgments.parquet -> labels_<SET>.jsonl + manifest.json
+  build-ablation  EXPLORATORY (evaluator-requested, not pre-registered): reads
+                the registered manifest + label files (never rewrites them)
+                and adds, on the same universe, SHIFT_FULL / SHIFT_n1000
+                (clip(RAW - Δ̂, 0, 3), continuous) and DIAL_ONLY (frozen dial,
+                identity map) / MAP_ONLY (L3, frozen map per record) under
+                manifest["ablation_sets"].  train/evaluate/compare take them
+                like any set (labels_<SET>.jsonl; no set-name whitelist).
+                Colab, after build-labels:
+                  for J in <judges>; do python scripts/batch7_distill.py \
+                    build-ablation --judge "$J"; done
+                  then the cell-3/4/5 loops with
+                  SETS="SHIFT_FULL SHIFT_n1000 DIAL_ONLY MAP_ONLY" and e.g.
+                  c SHIFT_FULL RAW; c SHIFT_FULL CORR_FROZEN; c DIAL_ONLY RAW;
+                  c MAP_ONLY RAW; c CORR_FROZEN DIAL_ONLY; c CORR_FROZEN MAP_ONLY
   sweep         per-arm hyper-parameter grid on the HUMAN set only (train split
                 -> validation loss + val_pred_mean); never touches dl22
   train         fine-tune one student (plain PyTorch loop; AMP fp16 on CUDA;
@@ -879,6 +893,31 @@ def print_manifest(m: dict) -> None:
           "inherits)")
 
 
+def load_judge_frame(data_dir: Path, judge: str, datasets) -> pd.DataFrame:
+    """One judge's judgments.parquet rows on ``datasets`` (flagship-scoped as
+    in batch 4).  Shared by build-labels and build-ablation so both see the
+    exact same records."""
+    df = pd.read_parquet(data_dir / "derived" / "judgments.parquet")
+    df = df[(df.model_id == judge)
+            & df.dataset.astype(str).isin(datasets)]
+    present = sorted(df.dataset.astype(str).unique())
+    missing = [ds for ds in datasets if ds not in present]
+    if missing:
+        sys.exit(f"ERROR: {judge} has NO rows on {missing}. The training "
+                 f"pool would silently differ from the requested one; re-run "
+                 f"with --train-datasets {','.join(present) or '(none)'} and "
+                 f"record that pool in the registration.")
+    try:
+        flagships = b4.flagship_model_ids(REPO / "config" / "models.yaml")
+    except Exception:                                          # noqa: BLE001
+        flagships = set()
+    if judge in flagships:
+        frozen_pairs, _p = b4.flagship_pairs_for(data_dir, datasets)
+        df = b4.scope_frame(df, judge, datasets, frozen_pairs, True,
+                            ",".join(datasets))
+    return df
+
+
 def cmd_build_labels(args) -> None:
     data_dir = resolve_data_dir(args.data_dir)
     datasets = parse_datasets(args.train_datasets)
@@ -891,24 +930,7 @@ def cmd_build_labels(args) -> None:
     if not rules_for_model:
         sys.exit(f"ERROR: no rules for {args.judge} in {rules_path}.")
 
-    df = pd.read_parquet(data_dir / "derived" / "judgments.parquet")
-    df = df[(df.model_id == args.judge)
-            & df.dataset.astype(str).isin(datasets)]
-    present = sorted(df.dataset.astype(str).unique())
-    missing = [ds for ds in datasets if ds not in present]
-    if missing:
-        sys.exit(f"ERROR: {args.judge} has NO rows on {missing}. The training "
-                 f"pool would silently differ from the requested one; re-run "
-                 f"with --train-datasets {','.join(present) or '(none)'} and "
-                 f"record that pool in the registration.")
-    try:
-        flagships = b4.flagship_model_ids(REPO / "config" / "models.yaml")
-    except Exception:                                          # noqa: BLE001
-        flagships = set()
-    if args.judge in flagships:
-        frozen_pairs, _p = b4.flagship_pairs_for(data_dir, datasets)
-        df = b4.scope_frame(df, args.judge, datasets, frozen_pairs, True,
-                            ",".join(datasets))
+    df = load_judge_frame(data_dir, args.judge, datasets)
 
     pairs_dir = Path(args.pairs_dir) if args.pairs_dir else data_dir / "inputs"
     texts = {}
@@ -936,6 +958,304 @@ def cmd_build_labels(args) -> None:
     print("=" * 78)
     print_manifest(m)
     print(f"\n  wrote {len(sets)} label files + manifest.json -> {out_dir}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# build-ablation — EXPLORATORY (evaluator-requested, NOT pre-registered)
+# ═══════════════════════════════════════════════════════════════════════════
+# Four extra label sets on the SAME universe as the registered sets, built
+# from the registered files + manifest (+ judgments.parquet for the per-record
+# dial/map sets).  The registered files and manifest entries are never
+# rewritten; the new sets live under manifest["ablation_sets"] /
+# manifest["ablation_meta"] only.
+
+ABLATION_ROLES = {
+    "SHIFT_FULL": ("EXPLORATORY: clip(RAW - Δ̂_full, 0, 3), CONTINUOUS (not "
+                   "rounded); Δ̂_full = mean(RAW) - mean(HUMAN) over the whole "
+                   "training universe (label scale). Locus test: a continuous "
+                   "constant shift on the labels, no rule granularity"),
+    "SHIFT_n1000": ("EXPLORATORY: clip(RAW - delta_hat, 0, 3), CONTINUOUS; "
+                    "delta_hat = the registered CORR_REFIT_n1000 rule's "
+                    "delta_hat (record-level, fitted on MIX_1000's human "
+                    "queries) — equal budget to CORR_REFIT_n1000"),
+    "DIAL_ONLY": ("EXPLORATORY: the frozen rule's dial level with the IDENTITY "
+                  "map; CORR_FROZEN code path (per family, paraphrase-mean, "
+                  "round-half-up) with only the map replaced"),
+    "MAP_ONLY": ("EXPLORATORY: L3 (default tone) records with the frozen map "
+                 "applied PER RECORD before the mean (as CORR_FROZEN), then "
+                 "round-half-up; CORR_FROZEN code path with only the dial "
+                 "replaced by L3"),
+}
+ABLATION_SETS = tuple(ABLATION_ROLES)
+ABLATION_SOURCE = {"SHIFT_FULL": "shift_full", "SHIFT_n1000": "shift_n1000",
+                   "DIAL_ONLY": "dial_only", "MAP_ONLY": "map_only"}
+ABLATION_DELTA_TOL = 1e-6      # recomputed Δ̂_full vs manifest summary
+
+
+def frozen_family_labels(d: pd.DataFrame, datasets, frozen_rule: dict,
+                         dial: int | None = None, mono=None) -> dict:
+    """The CORR_FROZEN construction of build_label_sets (per family:
+    qualified_labels at the rule's dial with the rule's map, map applied per
+    record before the mean) with the dial and/or the map overridable.  With
+    no override it must reproduce labels_CORR_FROZEN exactly (checked)."""
+    out = {}
+    for fam in sorted({FAMILY_OF_DATASET[ds] for ds in datasets}):
+        r = frozen_rule.get(fam)
+        if r is None:
+            sys.exit(f"ERROR: manifest has no frozen '{fam}' rule.")
+        fam_ds = [ds for ds in datasets if FAMILY_OF_DATASET[ds] == fam]
+        lv = int(r["dial_level"]) if dial is None else int(dial)
+        mp = (tuple(int(x) for x in r["monotone_map"]) if mono is None
+              else tuple(int(x) for x in mono))
+        out.update(qualified_labels(d, fam_ds, lv, mono=mp))
+    return out
+
+
+def ablation_diag(y: np.ndarray, h: np.ndarray, raw: np.ndarray,
+                  dsv: np.ndarray, y_unclipped: np.ndarray | None = None
+                  ) -> dict:
+    """Label diagnostics the evaluator used: level, Δ vs HUMAN, rounded-grade
+    histogram, share of RAW grade-1 pairs routed to (rounded) grade 0, label-
+    human Pearson."""
+    s = _summ(y, h)
+    yr = np.floor(y + 0.5)
+    r1 = raw == 1
+    s["raw1_routed_to_0"] = (float((yr[r1] == 0).mean()) if r1.any()
+                             else None)
+    s["n_raw1"] = int(r1.sum())
+    s["pearson_vs_human"] = (float(np.corrcoef(y, h)[0, 1])
+                             if y.std() > 0 and h.std() > 0 else None)
+    s["n_fractional"] = int((y != np.round(y)).sum())
+    if y_unclipped is not None:
+        s["mean_unclipped"] = float(y_unclipped.mean())
+        s["offset_vs_human_unclipped"] = float(y_unclipped.mean() - h.mean())
+        s["n_clipped"] = int((y != y_unclipped).sum())
+    s["per_dataset_offset"] = {ds: float(y[dsv == ds].mean()
+                                         - h[dsv == ds].mean())
+                               for ds in sorted(set(dsv))}
+    return s
+
+
+def build_ablation_sets(d: pd.DataFrame, manifest: dict, reg: dict
+                        ) -> tuple[dict, dict]:
+    """reg = {registered SET: {key: label}} read from the label files.
+    Returns ({ablation SET: {key: (label, source)}}, per-set info)."""
+    model = manifest["model"]
+    datasets = list(manifest["datasets"])
+    frozen_rule = manifest["frozen_rule"]
+    d = d[d.dataset.astype(str).isin(datasets)]
+    universe = sorted(reg["HUMAN"])
+    for n, lab in reg.items():
+        if sorted(lab) != universe:
+            sys.exit(f"ERROR: registered set {n} is not on the HUMAN universe.")
+
+    # integrity: the parquet + CORR_FROZEN code path reproduce the files
+    raw_re = qualified_labels(d, datasets, 3)
+    fro_re = frozen_family_labels(d, datasets, frozen_rule)
+    for nm, re_, f in (("RAW", raw_re, reg["RAW"]),
+                       ("CORR_FROZEN", fro_re, reg["CORR_FROZEN"])):
+        bad = [k for k in universe if k not in re_ or float(re_[k]) != f[k]]
+        if bad:
+            sys.exit(f"ERROR: {model}: recomputing {nm} from judgments.parquet "
+                     f"disagrees with labels_{nm}.jsonl on {len(bad)} pairs "
+                     f"(e.g. {bad[:3]}); the parquet or the code changed since "
+                     f"build-labels. No ablation labels written.")
+
+    h = np.array([reg["HUMAN"][k] for k in universe])
+    raw = np.array([reg["RAW"][k] for k in universe])
+    delta_full = float(raw.mean() - h.mean())
+    man_off = float(manifest["summary"]["RAW"]["offset_vs_human"])
+    if abs(delta_full - man_off) > ABLATION_DELTA_TOL:
+        sys.exit(f"ERROR: Δ̂_full recomputed from the files {delta_full:+.8f} "
+                 f"!= manifest RAW offset_vs_human {man_off:+.8f}.")
+
+    sets, info, notes = {}, {}, []
+    shifts = {"SHIFT_FULL": (delta_full, "mean(RAW) - mean(HUMAN), full "
+                             "universe, label scale (manifest summary "
+                             f"{man_off:+.8f})")}
+    eb = (manifest.get("equal_budget_rules") or {}).get("CORR_REFIT_n1000")
+    if eb is None or eb.get("delta_hat") is None:
+        notes.append("SHIFT_n1000 SKIPPED: no registered CORR_REFIT_n1000 "
+                     "rule with a delta_hat in the manifest")
+    else:
+        shifts["SHIFT_n1000"] = (float(eb["delta_hat"]),
+                                 "registered CORR_REFIT_n1000 rule delta_hat "
+                                 "(record level, MIX_1000 human queries)")
+    unclipped = {}
+    for name, (dh, why) in shifts.items():
+        yu = raw - dh
+        y = np.clip(yu, 0.0, 3.0)
+        unclipped[name] = yu
+        sets[name] = {k: (float(v), ABLATION_SOURCE[name])
+                      for k, v in zip(universe, y)}
+        info[name] = {"delta_hat": dh, "delta_source": why}
+
+    for name, kw in (("DIAL_ONLY", {"mono": IDENTITY_MAP}),
+                     ("MAP_ONLY", {"dial": 3})):
+        lab = frozen_family_labels(d, datasets, frozen_rule, **kw)
+        miss = [k for k in universe if k not in lab]
+        if miss:
+            sys.exit(f"ERROR: internal: {name} lacks {len(miss)} universe "
+                     f"labels.")
+        sets[name] = {k: (float(lab[k]), ABLATION_SOURCE[name])
+                      for k in universe}
+        info[name] = {"per_family": {
+            fam: {"dial_level": (3 if name == "MAP_ONLY"
+                                 else int(r["dial_level"])),
+                  "monotone_map": (list(IDENTITY_MAP) if name == "DIAL_ONLY"
+                                   else [int(x) for x in r["monotone_map"]])}
+            for fam, r in frozen_rule.items()}}
+
+    dsv = np.array([k[0] for k in universe])
+    for name, lab in sets.items():
+        y = np.array([lab[k][0] for k in universe])
+        equals = [n for n in ("RAW", "CORR_FROZEN", "HUMAN")
+                  if all(lab[k][0] == reg[n][k] for k in universe)]
+        info[name].update({
+            "role": ABLATION_ROLES[name],
+            "summary": ablation_diag(y, h, raw, dsv, unclipped.get(name)),
+            "equals_registered": equals,
+            "degenerate": bool(equals),
+        })
+    return sets, {"sets": info, "notes": notes, "delta_full": delta_full}
+
+
+def print_ablation_table(rows: list[tuple[str, dict, str]]) -> None:
+    print(f"  {'set':<17} {'n':>6} {'mean':>8} {'Δ vs HUMAN':>11} "
+          f"{'Δ unclip':>9} {'clip':>5} {'hist 0/1/2/3 (rounded)':<24}"
+          f"{'RAW1→0':>7} {'r(h)':>6}  flag")
+    for name, s, flag in rows:
+        hist = "/".join(str(s["hist"][str(g)]) for g in range(4))
+        un = s.get("offset_vs_human_unclipped")
+        r10, pr = s.get("raw1_routed_to_0"), s.get("pearson_vs_human")
+        print(f"  {name:<17} {s['n']:>6} {s['mean']:>8.4f} "
+              f"{s['offset_vs_human']:>+11.4f} "
+              f"{(f'{un:+.4f}' if un is not None else '-'):>9} "
+              f"{s.get('n_clipped', '-')!s:>5} {hist:<24}"
+              f"{(f'{r10:.3f}' if r10 is not None else '-'):>7} "
+              f"{(f'{pr:.3f}' if pr is not None else '-'):>6}  {flag}")
+
+
+def cmd_build_ablation(args) -> None:
+    data_dir = resolve_data_dir(args.data_dir)
+    out_root = Path(args.out_dir) if args.out_dir else \
+        data_dir / "derived" / "batch7"
+    jd = out_root / judge_slug(args.judge)
+    mpath = jd / "manifest.json"
+    if not mpath.exists():
+        sys.exit(f"ERROR: {mpath} missing — run build-labels first.")
+    manifest = json.loads(mpath.read_text(encoding="utf-8"))
+    if manifest.get("model") != args.judge:
+        sys.exit(f"ERROR: {mpath} is for {manifest.get('model')}, not "
+                 f"{args.judge}.")
+    datasets = list(manifest["datasets"])
+    guard_train_datasets(datasets)
+
+    # registered files: verify against the manifest, load, remember bytes
+    reg_files = manifest["files"]
+    before = {}
+    for n, f in reg_files.items():
+        p = jd / f"labels_{n}.jsonl"
+        before[n] = sha256_file(p)
+        if before[n] != f["sha256"]:
+            sys.exit(f"ERROR: {p} no longer matches its manifest sha256; "
+                     f"refusing to build ablations on changed files.")
+    reg_recs = {n: read_jsonl(jd / f"labels_{n}.jsonl")
+                for n in ("HUMAN", "RAW", "CORR_FROZEN")}
+    reg = {n: {(r["dataset"], r["qid"], r["docid"]): float(r["label"])
+               for r in recs} for n, recs in reg_recs.items()}
+    texts = {(r["dataset"], r["qid"], r["docid"]):
+             {"query": r["query"], "passage": r["passage"]}
+             for r in reg_recs["RAW"]}
+
+    df = load_judge_frame(data_dir, args.judge, datasets)
+    sets, ainfo = build_ablation_sets(df, manifest, reg)
+
+    blobs = {}
+    for name, lab in sets.items():
+        rows = []
+        for k in sorted(lab):
+            ds, q, doc = k
+            rows.append({"dataset": ds, "qid": q, "docid": doc,
+                         "query": texts[k]["query"],
+                         "passage": texts[k]["passage"],
+                         "label": lab[k][0], "source": lab[k][1], "set": name})
+        blobs[name] = jsonl_bytes(rows)
+    shas = {n: sha256_bytes(b) for n, b in blobs.items()}
+    old = manifest.get("ablation_sets") or {}
+    changed = sorted(n for n in old if n in shas
+                     and old[n].get("sha256") != shas[n])
+    if changed and not args.force:
+        sys.exit(f"ERROR: ablation sets {changed} would CHANGE; students may "
+                 f"already be trained on them; pass --force to overwrite.")
+    entries = {}
+    for name, b in blobs.items():
+        p = jd / f"labels_{name}.jsonl"
+        p.write_bytes(b)
+        entries[name] = dict(ainfo["sets"][name], path=str(p),
+                             sha256=shas[name], source=ABLATION_SOURCE[name])
+    after = {n: sha256_file(jd / f"labels_{n}.jsonl") for n in reg_files}
+    if after != before:
+        sys.exit("ERROR: internal: a registered label file changed.")
+
+    keys = sorted(reg["HUMAN"])
+    h = np.array([reg["HUMAN"][k] for k in keys])
+    raw = np.array([reg["RAW"][k] for k in keys])
+    dsv = np.array([k[0] for k in keys])
+    ref = {}
+    for n in reg_files:
+        recs = reg_recs.get(n) or read_jsonl(jd / f"labels_{n}.jsonl")
+        by_k = {(r["dataset"], r["qid"], r["docid"]): float(r["label"])
+                for r in recs}
+        y = np.array([by_k[k] for k in keys])
+        ref[n] = ablation_diag(y, h, raw, dsv)
+    fro = manifest["frozen_rule"]
+    manifest["ablation_sets"] = entries          # existing keys untouched
+    manifest["ablation_meta"] = {
+        "status": "EXPLORATORY (evaluator-requested 2026-10-12, NOT "
+                  "pre-registered); registered sets unchanged",
+        "delta_full": ainfo["delta_full"],
+        "frozen_rule_is_identity_at_L3": all(v["is_noop"]
+                                             for v in fro.values()),
+        "notes": ainfo["notes"],
+        "reference_diagnostics": ref,
+        "registered_sha256_verified": before,
+        "code_git": git_hash(),
+        "timestamp_utc": datetime.datetime.utcnow().isoformat(
+            timespec="seconds") + "Z",
+    }
+    mpath.write_text(json.dumps(manifest, indent=2, ensure_ascii=False),
+                     encoding="utf-8")
+
+    print("=" * 78)
+    print(f"  BATCH 7 build-ablation (EXPLORATORY) — {args.judge}   "
+          f"(universe {len(keys)} pairs, train {datasets})")
+    print("=" * 78)
+    for fam, r in fro.items():
+        print(f"  frozen {fam} rule: dial=L{r['dial_level']} "
+              f"map={r['monotone_map']}{'  [NO-OP]' if r['is_noop'] else ''}")
+    for name in ("SHIFT_FULL", "SHIFT_n1000"):
+        if name in entries:
+            print(f"  {name}: Δ̂ = {entries[name]['delta_hat']:+.6f} "
+                  f"({entries[name]['delta_source']})")
+    for n in ainfo["notes"]:
+        print(f"  NOTE: {n}")
+    for name, e in entries.items():
+        if e["degenerate"]:
+            print(f"  WARNING: {name} is DEGENERATE — bit-identical to "
+                  f"{e['equals_registered']} (manifest flag degenerate=true); "
+                  f"its students only re-measure that set.")
+    print()
+    rows = [(n, ref[n], "registered") for n in reg_files]
+    rows += [(n, e["summary"],
+              "DEGENERATE=" + "/".join(e["equals_registered"])
+              if e["degenerate"] else "ablation") for n, e in entries.items()]
+    print_ablation_table(rows)
+    print("  (RAW1→0 = share of RAW grade-1 pairs whose rounded label is 0; "
+          "r(h) = label-human Pearson; clip = labels moved by the [0,3] clip)")
+    print(f"\n  wrote {len(entries)} ablation label files; manifest "
+          f"'ablation_sets' updated -> {jd}  (registered files verified "
+          f"byte-identical)")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2019,6 +2339,166 @@ def cmd_selftest(args) -> None:
           independent_level_labels(dl, 3)
           == qualified_labels(dl, ["dl19", "dl20"], 3))
 
+    # -- 1c. build-ablation (EXPLORATORY sets) --------------------------------
+    def ab_ns(judge, **kw):
+        ns = dict(data_dir=str(root), judge=judge, out_dir=None, force=False)
+        ns.update(kw)
+        return argparse.Namespace(**ns)
+
+    def snap(jdir):
+        return {n: (jdir / f"labels_{n}.jsonl").read_bytes() for n in ALL}
+
+    def labmap(path):
+        return {(r["dataset"], r["qid"], r["docid"]): r["label"]
+                for r in read_jsonl(path)}
+
+    def indep_mapped(dd, level, mono):
+        ok = dd[(dd.politeness_level == level) & dd.parse_ok.astype(bool)
+                & dd.score.notna()]
+        s = np.asarray(mono, dtype=float)[ok.score.to_numpy().astype(int)]
+        g = pd.Series(s).groupby([ok.dataset.astype(str).to_numpy(),
+                                  ok.qid.astype(str).to_numpy(),
+                                  ok.docid.astype(str).to_numpy()]).mean()
+        return {k: float(np.clip(np.floor(v + 0.5), 0, 3)) for k, v in g.items()}
+
+    # (i) non-trivial frozen rule: the noisy stub judge with dial L4 and map
+    # [0,0,2,3] (own rules file + own labels root; the defaults stay intact)
+    ab_map = [0, 0, 2, 3]
+    rules_ab = json.loads((root / "derived" / "correction_rules.json")
+                          .read_text())
+    rules_ab["rules"]["stub/identity"]["msmarco"].update(
+        dial_level=4, monotone_map=ab_map)
+    rp_ab = tmp / "rules_ab.json"
+    rp_ab.write_text(json.dumps(rules_ab))
+    ab_root = tmp / "abl_out"
+    cmd_build_labels(bl_ns("stub/identity", rules=str(rp_ab),
+                           out_dir=str(ab_root)))
+    ja = ab_root / judge_slug("stub/identity")
+    reg_before = snap(ja)
+    mf_before = json.loads((ja / "manifest.json").read_text())
+    cmd_build_ablation(ab_ns("stub/identity", out_dir=str(ab_root)))
+    mf_after = json.loads((ja / "manifest.json").read_text())
+    check("ablation: registered label files byte-identical before/after",
+          snap(ja) == reg_before)
+    check("ablation: existing manifest keys unchanged; new keys only "
+          "'ablation_sets' / 'ablation_meta'",
+          {k: v for k, v in mf_after.items()
+           if k not in ("ablation_sets", "ablation_meta")} == mf_before
+          and set(mf_after["ablation_sets"]) == set(ABLATION_SETS))
+    A = {n: read_jsonl(ja / f"labels_{n}.jsonl") for n in ABLATION_SETS}
+    hum_recs = read_jsonl(ja / "labels_HUMAN.jsonl")
+    check("ablation: 4 sets on the registered universe (same order), same "
+          "record schema",
+          all([(r["dataset"], r["qid"], r["docid"]) for r in v]
+              == [(r["dataset"], r["qid"], r["docid"]) for r in hum_recs]
+              and set(v[0]) == set(hum_recs[0]) for v in A.values()))
+    dfa = pd.read_parquet(root / "derived" / "judgments.parquet")
+    di = dfa[(dfa.model_id == "stub/identity")
+             & dfa.dataset.isin(["dl19", "dl20"])]
+    keys_u = [(r["dataset"], r["qid"], r["docid"]) for r in hum_recs]
+    L = {n: labmap(ja / f"labels_{n}.jsonl")
+         for n in ("RAW", "CORR_FROZEN") + ABLATION_SETS}
+    ind4 = independent_level_labels(di, 4)
+    ind3 = independent_level_labels(di, 3)
+    m4, m3 = indep_mapped(di, 4, ab_map), indep_mapped(di, 3, ab_map)
+    check("DIAL_ONLY = frozen dial (L4) without the map; CORR_FROZEN = the "
+          "same L4 records WITH the map (independent pandas recomputation)",
+          all(L["DIAL_ONLY"][k] == ind4[k] and L["CORR_FROZEN"][k] == m4[k]
+              for k in keys_u))
+    check("MAP_ONLY = L3 records with the frozen map per record; RAW = the "
+          "same L3 records without it (independent pandas recomputation)",
+          all(L["MAP_ONLY"][k] == m3[k] and L["RAW"][k] == ind3[k]
+              for k in keys_u))
+    ea = mf_after["ablation_sets"]
+    check("non-trivial rule: DIAL_ONLY != CORR_FROZEN, MAP_ONLY != RAW, "
+          "neither flagged degenerate",
+          L["DIAL_ONLY"] != L["CORR_FROZEN"] and L["MAP_ONLY"] != L["RAW"]
+          and not ea["DIAL_ONLY"]["degenerate"]
+          and not ea["MAP_ONLY"]["degenerate"])
+    raw_v = np.array([L["RAW"][k] for k in keys_u])
+    mo_v = np.array([L["MAP_ONLY"][k] for k in keys_u])
+    check("manifest RAW1→0 share for MAP_ONLY matches a recomputation",
+          abs(ea["MAP_ONLY"]["summary"]["raw1_routed_to_0"]
+              - float((np.floor(mo_v[raw_v == 1] + 0.5) == 0).mean()))
+          < 1e-12)
+    tampered = ja / "labels_RAW.jsonl"
+    tampered.write_bytes(reg_before["RAW"] + b"\n")
+    check("build-ablation refuses when a registered file no longer matches "
+          "its manifest sha256",
+          exits(lambda: cmd_build_ablation(ab_ns("stub/identity",
+                                                 out_dir=str(ab_root)))))
+    tampered.write_bytes(reg_before["RAW"])
+
+    # (ii) SHIFT sets on the lenient judge (RAW offset +0.73)
+    jl = root / "derived" / "batch7" / judge_slug("stub/lenient")
+    reg_l = snap(jl)
+    cmd_build_ablation(ab_ns("stub/lenient"))
+    check("ablation (lenient): registered files byte-identical",
+          snap(jl) == reg_l)
+    mfl = json.loads((jl / "manifest.json").read_text())
+    el = mfl["ablation_sets"]
+    hl = labmap(jl / "labels_HUMAN.jsonl")
+    rl = labmap(jl / "labels_RAW.jsonl")
+    kl = sorted(hl)
+    hv = np.array([hl[k] for k in kl])
+    rv = np.array([rl[k] for k in kl])
+    dfull = float(rv.mean() - hv.mean())
+    sf = labmap(jl / "labels_SHIFT_FULL.jsonl")
+    sv = np.array([sf[k] for k in kl])
+    check("SHIFT_FULL: Δ̂_full = mean(RAW)-mean(HUMAN) = manifest summary "
+          "(1e-6); mean(RAW-Δ̂)-mean(HUMAN) ≈ 0 before clipping (1e-6)",
+          abs(el["SHIFT_FULL"]["delta_hat"] - dfull) < 1e-6
+          and abs(dfull - mfl["summary"]["RAW"]["offset_vs_human"]) < 1e-6
+          and abs(float((rv - dfull).mean() - hv.mean())) < 1e-6
+          and abs(el["SHIFT_FULL"]["summary"]["offset_vs_human_unclipped"])
+          < 1e-6)
+    check("SHIFT_FULL: labels = clip(RAW-Δ̂,0,3) exactly, continuous (not "
+          "rounded), offset after clipping small",
+          np.array_equal(sv, np.clip(rv - dfull, 0, 3))
+          and (sv != np.round(sv)).any() and sv.min() >= 0 and sv.max() <= 3
+          and abs(float(sv.mean() - hv.mean())) < 0.05,
+          f"clipped offset {float(sv.mean() - hv.mean()):+.6f}")
+    dn = mfl["equal_budget_rules"]["CORR_REFIT_n1000"]["delta_hat"]
+    s1k = labmap(jl / "labels_SHIFT_n1000.jsonl")
+    s1v = np.array([s1k[k] for k in kl])
+    check("SHIFT_n1000: Δ̂ = registered CORR_REFIT_n1000 delta_hat; labels "
+          "= clip(RAW-Δ̂,0,3); unclipped offset = Δ̂_full - Δ̂_n1000",
+          el["SHIFT_n1000"]["delta_hat"] == dn
+          and np.array_equal(s1v, np.clip(rv - dn, 0, 3))
+          and abs(el["SHIFT_n1000"]["summary"]["offset_vs_human_unclipped"]
+                  - (dfull - dn)) < 1e-9)
+    check("lenient (dial L2, identity map): DIAL_ONLY == CORR_FROZEN and "
+          "MAP_ONLY == RAW, both flagged degenerate",
+          el["DIAL_ONLY"]["equals_registered"][:1] == ["CORR_FROZEN"]
+          and el["MAP_ONLY"]["equals_registered"][:1] == ["RAW"]
+          and el["DIAL_ONLY"]["degenerate"] and el["MAP_ONLY"]["degenerate"])
+    check("build-ablation rerun is idempotent (no --force needed)",
+          not exits(lambda: cmd_build_ablation(ab_ns("stub/lenient"))))
+    mfl["ablation_sets"]["SHIFT_FULL"]["sha256"] = "0" * 64
+    (jl / "manifest.json").write_text(json.dumps(mfl, indent=2))
+    check("changed ablation set refuses to overwrite without --force",
+          exits(lambda: cmd_build_ablation(ab_ns("stub/lenient"))))
+    check("... and overwrites with --force (registered files untouched)",
+          not exits(lambda: cmd_build_ablation(ab_ns("stub/lenient",
+                                                     force=True)))
+          and snap(jl) == reg_l)
+
+    # (iii) identity@L3 judge: DIAL_ONLY / MAP_ONLY == RAW, degenerate
+    jdi = root / "derived" / "batch7" / judge_slug("stub/identity")
+    reg_i = snap(jdi)
+    cmd_build_ablation(ab_ns("stub/identity"))
+    ei = json.loads((jdi / "manifest.json").read_text())["ablation_sets"]
+    ri = [r["label"] for r in read_jsonl(jdi / "labels_RAW.jsonl")]
+    check("identity@L3 judge: DIAL_ONLY and MAP_ONLY == RAW bit-exactly, "
+          "manifest degenerate=true, registered files byte-identical",
+          all([r["label"] for r in read_jsonl(jdi / f"labels_{n}.jsonl")]
+              == ri and ei[n]["degenerate"]
+              and "RAW" in ei[n]["equals_registered"]
+              for n in ("DIAL_ONLY", "MAP_ONLY"))
+          and snap(jdi) == reg_i
+          and json.loads((jdi / "manifest.json").read_text())
+          ["ablation_meta"]["frozen_rule_is_identity_at_L3"])
+
     # -- 2. metric unit checks ---------------------------------------------
     nd, ap = query_metrics(["a", "b", "c"], [3.0, 2.0, 1.0], [3, 1, 2])
     want = (7 + 1 / math.log2(3) + 3 / 2) / (7 + 3 / math.log2(3) + 1 / 2)
@@ -2164,6 +2644,22 @@ def cmd_selftest(args) -> None:
                   and all(v["train_loss_epoch"] is not None
                           for v in tl["val"][1:]),
                   f"epoch-0 pred mean {tl['val'][0]['val_pred_mean']:.3f}")
+        sh_all = [r for r in read_jsonl(jd / "labels_SHIFT_FULL.jsonl")
+                  if r["dataset"] == "dl19"]
+        sh_keys = {(r["qid"], r["docid"]) for r in sub}
+        sh_sub = [r for r in sh_all if (r["qid"], r["docid"]) in sh_keys]
+        sh_p = jd / "labels_SHIFT64.jsonl"
+        write_jsonl(sh_p, sh_sub)
+        out_sh = mroot / "SHIFT_FULL_s1"
+        cmd_train(train_ns("regression", out_sh, labels=str(sh_p)))
+        tl = json.loads((out_sh / "train_log.json").read_text())
+        check("train accepts continuous (SHIFT_FULL) float targets: label "
+              "mean logged exactly, finite loss, set name recorded",
+              any(r["label"] != round(r["label"]) for r in sh_sub)
+              and abs(tl["label_mean_all"]
+                      - np.mean([r["label"] for r in sh_sub])) < 1e-6
+              and all(np.isfinite(x["loss"]) for x in tl["loss_curve"])
+              and tl["label_set"] == "SHIFT_FULL")
         from safetensors.torch import load_file
         wa = load_file(str(outs["reg_s1"] / "model.safetensors"))
         wb = load_file(str(outs["reg_s1b"] / "model.safetensors"))
@@ -2352,6 +2848,18 @@ def main() -> None:
     p.add_argument("--force", action="store_true",
                    help="overwrite label files that would change")
     p.set_defaults(func=cmd_build_labels)
+
+    p = sub.add_parser("build-ablation",
+                       help="EXPLORATORY: SHIFT_FULL / SHIFT_n1000 / DIAL_ONLY "
+                            "/ MAP_ONLY on the registered universe")
+    p.add_argument("--data-dir", default=None)
+    p.add_argument("--judge", required=True, help="model_id")
+    p.add_argument("--out-dir", default=None,
+                   help="labels root used by build-labels (default "
+                        "$DATA_DIR/derived/batch7)")
+    p.add_argument("--force", action="store_true",
+                   help="overwrite ablation label files that would change")
+    p.set_defaults(func=cmd_build_ablation)
 
     p = sub.add_parser("sweep", help="per-arm hyper-parameter grid on HUMAN")
     p.add_argument("--labels", required=True, help="labels_HUMAN.jsonl")
