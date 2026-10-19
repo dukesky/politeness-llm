@@ -50,6 +50,11 @@ def load_evals(root: Path) -> dict:
     return out
 
 
+def extra_sets(sets: dict) -> tuple:
+    """Sets not in SETS, e.g. train --tag variants '<SET>@<tag>' (EXPLORATORY)."""
+    return tuple(sorted(s for s in sets if s not in SETS))
+
+
 def seed_mean(rs: dict, key: str) -> tuple[float, float, int]:
     vals = [r["point"][key] for r in rs.values()]
     sd = statistics.pstdev(vals) if len(vals) > 1 else 0.0
@@ -59,7 +64,7 @@ def seed_mean(rs: dict, key: str) -> tuple[float, float, int]:
 def fmt_table(arm: str, slug: str, sets: dict) -> None:
     print(f"\n  [{arm}] {slug}  (3-seed mean; sd in parentheses = seed noise)")
     print("  " + f"{'set':<18}" + "".join(f"{k:>16}" for k in SHOW))
-    for s in SETS:
+    for s in SETS + extra_sets(sets):
         if s not in sets:
             continue
         cells = []
@@ -269,17 +274,18 @@ def print_ablation(ev: dict, cmp_: dict) -> None:
     dial (DIAL_ONLY) vs map (MAP_ONLY)."""
     keys = ("ndcg10", "offset", "f1", "rel_rate_ratio")
     if not any(s in sets for a in ev.values() for sets in a.values()
-               for s in ABLATION_SHOW[3:]):
+               for s in ABLATION_SHOW[3:] + extra_sets(sets)):
         return
     print("\n" + "=" * 100 + "\n  ABLATION (exploratory; evaluator-requested, NOT pre-registered; "
           "3-seed means, * = paired 90% CI excludes 0)\n" + "=" * 100)
     for arm in ARMS:
         for slug, sets in ev.get(arm, {}).items():
-            if not any(s in sets for s in ABLATION_SHOW[3:]):
+            show = ABLATION_SHOW + extra_sets(sets)
+            if not any(s in sets for s in show[3:]):
                 continue
             print(f"\n  [{arm}] {slug}")
             print("  " + f"{'set':<14}" + "".join(f"{k:>16}" for k in ("NDCG@10", "offset", "F1@2", "ratio")))
-            for s in ABLATION_SHOW:
+            for s in show:
                 if s not in sets:
                     print(f"  {s:<14}  (absent)")
                     continue
@@ -288,8 +294,8 @@ def print_ablation(ev: dict, cmp_: dict) -> None:
                       + ("" if n == 3 else f"   <-- only {n} seed(s)"))
             cs = cmp_.get(arm, {}).get(slug, {})
             rows = [(nm, r) for nm, r in cs.items()
-                    if all(x in ABLATION_SHOW for x in nm.split("_vs_"))
-                    and any(x in ABLATION_SHOW[3:] for x in nm.split("_vs_"))]
+                    if all(x in show for x in nm.split("_vs_"))
+                    and any(x in show[3:] for x in nm.split("_vs_"))]
             if rows:
                 print("    paired compares A - B:")
             for nm, r in rows:

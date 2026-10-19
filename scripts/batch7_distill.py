@@ -270,6 +270,8 @@ DELTA_TOL = 0.02           # |recomputed Delta - rule delta_hat|
 CALIB_WARN = 0.25          # |val_pred_mean - val_label_mean| at selection
 HEAD_STD = 0.02
 HEAD_BIAS_REGRESSION = 1.5
+HEAD_BIAS_DEFAULT = "1.5"      # train --head-bias default: the registered recipe
+TAG_RE = re.compile(r"^[A-Za-z0-9-]+$")   # train --tag (EXPLORATORY variants)
 
 SET_ROLES = {
     "HUMAN": "upper-bound reference: qrels grade",
@@ -1329,7 +1331,8 @@ def output_head(model, k: int):
     return pick[-1]
 
 
-def reset_head(model, objective: str, seed: int) -> str:
+def reset_head(model, objective: str, seed: int,
+               bias: float | None = None) -> str:
     """Deterministic head re-init for EVERY arm and objective: W ~ N(0, 0.02)
     from a seed-derived generator; bias 1.5 (regression, mid-scale) or 0
     (ordinal: sum of three sigmoid(0) = 1.5, the same starting point)."""
@@ -1341,9 +1344,44 @@ def reset_head(model, objective: str, seed: int) -> str:
                                                          generator=g)
         lin.weight.copy_(w)
         if lin.bias is not None:
-            lin.bias.fill_(HEAD_BIAS_REGRESSION if objective == "regression"
-                           else 0.0)
+            if bias is None:
+                bias = (HEAD_BIAS_REGRESSION if objective == "regression"
+                        else 0.0)
+            lin.bias.fill_(bias)
     return name
+
+
+def resolve_head_bias(spec: str, objective: str, y_train: np.ndarray):
+    """train --head-bias -> (mode, value).  '1.5' (default) is the registered
+    recipe, bit-identical to HEAD_BIAS_REGRESSION; 'label_mean' = mean of the
+    training-split labels actually fitted (EXPLORATORY); else a float."""
+    spec = str(spec)
+    if spec == HEAD_BIAS_DEFAULT:
+        assert float(spec) == HEAD_BIAS_REGRESSION, "default head bias drifted"
+        return "default", (HEAD_BIAS_REGRESSION if objective == "regression"
+                           else 0.0)
+    if objective != "regression":
+        sys.exit("ERROR: --head-bias applies to the regression objective only.")
+    if spec == "label_mean":
+        v = float(np.asarray(y_train, dtype=np.float32).mean())
+        print(f"  head bias = training-label mean {v:.6f} "
+              f"(n={len(y_train)} train-split labels)")
+        return "label_mean", v
+    try:
+        return "float", float(spec)
+    except ValueError:
+        sys.exit(f"ERROR: --head-bias must be 1.5, label_mean or a float; "
+                 f"got {spec!r}.")
+
+
+def tagged_set_name(set_name: str, tag: str | None) -> str:
+    """train --tag: '<SET>@<tag>' marks an EXPLORATORY recipe variant as a
+    distinct label set for evaluate / compare / summary."""
+    if tag is None:
+        return set_name
+    if not TAG_RE.match(str(tag)):
+        sys.exit(f"ERROR: --tag must match {TAG_RE.pattern}; got {tag!r}.")
+    return f"{set_name}@{tag}"
 
 
 def encode(tokenizer, queries, passages, max_len: int) -> list[dict]:
@@ -1388,7 +1426,8 @@ def load_student(name_or_dir, num_labels: int | None = None):
 def run_training(recs: list[dict], *, model_name: str, objective: str,
                  epochs: int, lr: float, bs: int, max_len: int, seed: int,
                  device, fp16: bool, weight_decay: float, warmup: float,
-                 select: str, log_every: int):
+                 select: str, log_every: int,
+                 head_bias: str = HEAD_BIAS_DEFAULT):
     """Train one student; returns (model, tokenizer, partial log dict)."""
     torch = _torch()
     from transformers import get_linear_schedule_with_warmup
@@ -1408,7 +1447,9 @@ def run_training(recs: list[dict], *, model_name: str, objective: str,
 
     set_determinism(seed)
     model, tok = load_student(model_name, n_outputs(objective))
-    head = reset_head(model, objective, seed)
+    hb_mode, hb_val = resolve_head_bias(head_bias, objective, y_all[tr_idx])
+    head = reset_head(model, objective, seed,
+                      None if hb_mode == "default" else hb_val)
     model.to(device)
     feats = encode(tok, [r["query"] for r in recs],
                    [r["passage"] for r in recs], max_len)
@@ -1506,9 +1547,8 @@ def run_training(recs: list[dict], *, model_name: str, objective: str,
     rose = any(b > a for a, b in zip(vl_seq, vl_seq[1:])
                if np.isfinite(a) and np.isfinite(b))
     log = {
-        "head_reset": {"module": head, "w_std": HEAD_STD,
-                       "bias": (HEAD_BIAS_REGRESSION if objective == "regression"
-                                else 0.0)},
+        "head_reset": {"module": head, "w_std": HEAD_STD, "bias": hb_val},
+        "head_bias_mode": hb_mode, "head_bias_value": hb_val,
         "n_train": int(tr_idx.size), "n_val": int(va_idx.size),
         "n_train_queries": len(tr_q), "n_val_queries": len(va_q),
         "val_query_disjoint": len(tr_q & va_q) == 0,
@@ -1547,7 +1587,9 @@ def cmd_train(args) -> None:
     recs = read_jsonl(labels_path)
     if not recs:
         sys.exit(f"ERROR: {labels_path} is empty.")
-    datasets, set_name, judge = labels_meta(labels_path, recs)
+    datasets, base_set, judge = labels_meta(labels_path, recs)
+    tag = getattr(args, "tag", None)
+    set_name = tagged_set_name(base_set, tag)
 
     device = pick_device(args.device)
     fp16 = bool(device.type == "cuda" and not args.no_fp16)
@@ -1559,7 +1601,10 @@ def cmd_train(args) -> None:
         recs, model_name=model_name, objective=args.objective, epochs=epochs,
         lr=lr, bs=args.bs, max_len=args.max_len, seed=args.seed,
         device=device, fp16=fp16, weight_decay=args.weight_decay,
-        warmup=args.warmup, select=args.select, log_every=args.log_every)
+        warmup=args.warmup, select=args.select, log_every=args.log_every,
+        head_bias=getattr(args, "head_bias", HEAD_BIAS_DEFAULT))
+    hp["head_bias_mode"] = log.pop("head_bias_mode")
+    hp["head_bias_value"] = log.pop("head_bias_value")
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -1570,8 +1615,8 @@ def cmd_train(args) -> None:
     (out / "batch7_config.json").write_text(json.dumps(cfg, indent=2))
     log.update({
         "labels": str(labels_path), "labels_sha256": sha256_file(labels_path),
-        "label_set": set_name, "judge": judge, "train_datasets": datasets,
-        "arm": arm, "base_model": model_name,
+        "label_set": set_name, "label_set_base": base_set, "tag": tag,
+        "judge": judge, "train_datasets": datasets, "arm": arm, "base_model": model_name,
         "hyperparams": hp,
         "hyperparams_from_arm_defaults": {"epochs": ep_def, "lr": lr_def},
         "objective": args.objective, "seed": args.seed,
@@ -2557,6 +2602,44 @@ def cmd_selftest(args) -> None:
     finally:
         PREDICTIONS_PATH = saved
 
+    # -- 3b. --tag / --head-bias plumbing (no torch) ------------------------
+    check("--tag: label_set becomes <SET>@<tag>; no tag = unchanged; bad tag "
+          "refused",
+          tagged_set_name("SHIFT_FULL", "hb") == "SHIFT_FULL@hb"
+          and tagged_set_name("HUMAN", None) == "HUMAN"
+          and exits(lambda: tagged_set_name("HUMAN", "a_s1"))
+          and exits(lambda: tagged_set_name("HUMAN", "")))
+    yy = np.array([0.0, 1.0, 2.0, 0.5], dtype=np.float32)
+    check("--head-bias: default '1.5' is the registered bias; label_mean = "
+          "mean of the given labels; ordinal refuses a non-default bias",
+          resolve_head_bias(HEAD_BIAS_DEFAULT, "regression", yy)
+          == ("default", HEAD_BIAS_REGRESSION)
+          and resolve_head_bias(HEAD_BIAS_DEFAULT, "ordinal-threshold", yy)
+          == ("default", 0.0)
+          and resolve_head_bias("label_mean", "regression", yy)
+          == ("label_mean", 0.875)
+          and resolve_head_bias("0.9", "regression", yy) == ("float", 0.9)
+          and exits(lambda: resolve_head_bias("label_mean",
+                                              "ordinal-threshold", yy))
+          and exits(lambda: resolve_head_bias("x", "regression", yy)))
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "b7summary", Path(__file__).resolve().parent / "batch7_summary.py")
+    b7s = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(b7s)
+    sroot = tmp / "sum_eval"
+    sd_ = sroot / "minilm-raw" / "deepseek__deepseek-v4-flash"
+    sd_.mkdir(parents=True)
+    for nm in ("SHIFT_FULL@hb_s1", "SHIFT_FULL@hb_s2", "SHIFT_FULL_s1",
+               "SHIFT_n1000_s3"):
+        (sd_ / f"{nm}_dl22.json").write_text("{}")
+    sev = b7s.load_evals(sroot)["minilm-raw"]["deepseek__deepseek-v4-flash"]
+    check("summary parser: '<SET>@<tag>_s<seed>' parses to a distinct set "
+          "and is listed as an extra (ablation) set",
+          set(sev) == {"SHIFT_FULL@hb", "SHIFT_FULL", "SHIFT_n1000"}
+          and sorted(sev["SHIFT_FULL@hb"]) == [1, 2]
+          and b7s.extra_sets(sev) == ("SHIFT_FULL@hb",))
+
     # -- 4. torch side -----------------------------------------------------
     try:
         import torch
@@ -2659,7 +2742,26 @@ def cmd_selftest(args) -> None:
               and abs(tl["label_mean_all"]
                       - np.mean([r["label"] for r in sh_sub])) < 1e-6
               and all(np.isfinite(x["loss"]) for x in tl["loss_curve"])
-              and tl["label_set"] == "SHIFT_FULL")
+              and tl["label_set"] == "SHIFT_FULL"
+              and tl["hyperparams"]["head_bias_mode"] == "default"
+              and tl["hyperparams"]["head_bias_value"] == HEAD_BIAS_REGRESSION
+              and tl["head_reset"]["bias"] == HEAD_BIAS_REGRESSION)
+        out_hb = mroot / "SHIFT_FULL@hb_s1"
+        cmd_train(train_ns("regression", out_hb, labels=str(sh_p),
+                           head_bias="label_mean", tag="hb"))
+        tlh = json.loads((out_hb / "train_log.json").read_text())
+        check("train --head-bias label_mean --tag hb: bias = train-split label "
+              "mean (logged), label_set SHIFT_FULL@hb, same labels sha",
+              tlh["hyperparams"]["head_bias_mode"] == "label_mean"
+              and abs(tlh["hyperparams"]["head_bias_value"]
+                      - tlh["label_mean_train"]) < 1e-6
+              and tlh["head_reset"]["bias"]
+              == tlh["hyperparams"]["head_bias_value"]
+              and abs(tlh["val"][0]["val_pred_mean"]
+                      - tlh["label_mean_train"]) < 0.5
+              and tlh["label_set"] == "SHIFT_FULL@hb"
+              and tlh["label_set_base"] == "SHIFT_FULL"
+              and tlh["labels_sha256"] == tl["labels_sha256"])
         from safetensors.torch import load_file
         wa = load_file(str(outs["reg_s1"] / "model.safetensors"))
         wb = load_file(str(outs["reg_s1b"] / "model.safetensors"))
@@ -2881,6 +2983,12 @@ def main() -> None:
                    help="'last' (default, fixed epochs) or 'best' (lowest "
                         "validation loss; robustness option)")
     p.add_argument("--log-every", type=int, default=20)
+    p.add_argument("--head-bias", default=HEAD_BIAS_DEFAULT,
+                   help="regression head bias init: 1.5 (registered default), "
+                        "label_mean (train-split label mean; EXPLORATORY) or "
+                        "a float")
+    p.add_argument("--tag", default=None,
+                   help="EXPLORATORY variant tag: label_set becomes <SET>@<tag>")
     _add_train_common(p)
     p.set_defaults(func=cmd_train)
 
