@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 : "${DATA_DIR:?DATA_DIR not set}"
 MODELS=${MODELS:-/content/batch7_models}
 ARM=${ARM:-minilm-raw}; TAG=${TAG:-hb}; SLUGS=${SLUGS:-deepseek__deepseek-v4-flash}; HB_SETS=${HB_SETS:-"SHIFT_FULL HUMAN"}
-EP=${EP:-5}; LR=${LR:-3e-5}
+EP=${EP:-5}; LR=${LR:-3e-5}; HEAD_BIAS=${HEAD_BIAS:-label_mean}
 for SLUG in $SLUGS; do
 E="$DATA_DIR/derived/batch7/eval/$ARM/$SLUG"; T="$DATA_DIR/derived/batch7/train_logs/$ARM/$SLUG"
 mkdir -p "$E" "$T"
@@ -19,7 +19,7 @@ for SET in $HB_SETS; do
   N="${SET}@${TAG}_s$SEED"; M="$MODELS/$ARM/$SLUG/$N"; O="$E/${N}_dl22.json"
   if [ ! -f "$M/train_log.json" ]; then
    python scripts/batch7_distill.py train --arm $ARM --labels "$L" --out "$M" --seed $SEED --epochs $EP --lr $LR \
-     --bs 32 --max-len 256 --objective regression --head-bias label_mean --tag $TAG \
+     --bs 32 --max-len 256 --objective regression --head-bias $HEAD_BIAS --tag $TAG \
      > /tmp/b7_hb_train_last.txt 2>&1 || { tail -30 /tmp/b7_hb_train_last.txt; exit 1; }
    grep "head bias =" /tmp/b7_hb_train_last.txt
   fi
