@@ -1423,3 +1423,13 @@ RAW 自身均值 ≈1.5，故 RAW 学生不受此改动影响，充当对照。�
 - 补做配对比较 LSHIFT@hb vs HUMAN@hb。
 判定以同集配对差（hb/mb − 原学生，同重采样 query）为主，点估计 vs RAW 为辅；不再用"CI 含 0"作判据。
 开箱结果（跑完回填）：
+2026-10-19 跑完（v4-flash、主 arm、3 seed；同集配对差 = 新学生 − 原学生）：
+- RAW@mb（RAW 标签 + 偏置 1.07，人为失配 ≈0.49）：NDCG 0.4439；vs RAW −0.0150 [−0.033,+0.002]；offset/F1/ratio 不变
+  （+0.002 / +0.014 / −0.011）→ **标签不变、只有失配，就复现了 ≈0.015 的损失**。
+- RAW@hb（RAW 标签 + 偏置=自身均值 ≈1.56，阴性对照）：NDCG 0.4594；vs RAW +0.0006 [−0.004,+0.005] → 无变化，对照成立。
+- CORR_REFIT_n1000@hb：NDCG 0.4504（原 0.4261）；vs RAW −0.0085 [−0.034,+0.019]（原 −0.0328*）→ 恢复约 +0.024，
+  大部分损失为失配所致。
+- LSHIFT@hb vs HUMAN@hb 配对比较见 eval/minilm-raw/deepseek__deepseek-v4-flash/compare_SHIFT_FULL@hb_vs_HUMAN@hb.json。
+- 主 agent 初读（待复核）：失配机制被直接证实（RAW@mb）。综合 2/2b/2c：主 arm 校正标签学生的排序损失中，
+  偏置失配可解释 LSHIFT（全部）、3.5-flash 的 CORR_FROZEN/MAP_ONLY（全部）、v4 的 CORR_REFIT_n1000（大部分），
+  但不能解释 v4-flash 的 CORR_FROZEN/MAP_ONLY（残留 ≈0.018）——该残留是 v4 冻结 map 的结构性代价候选。
