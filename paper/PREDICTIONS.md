@@ -1433,3 +1433,19 @@ RAW 自身均值 ≈1.5，故 RAW 学生不受此改动影响，充当对照。�
 - 主 agent 初读（待复核）：失配机制被直接证实（RAW@mb）。综合 2/2b/2c：主 arm 校正标签学生的排序损失中，
   偏置失配可解释 LSHIFT（全部）、3.5-flash 的 CORR_FROZEN/MAP_ONLY（全部）、v4 的 CORR_REFIT_n1000（大部分），
   但不能解释 v4-flash 的 CORR_FROZEN/MAP_ONLY（残留 ≈0.018）——该残留是 v4 冻结 map 的结构性代价候选。
+
+**追加 2/2b/2c 评估员复核（Sonnet，2026-10-19；内部 docs/evaluator_reports/2026-10-19_b7_headbias_sonnet.md 与 …_headbias2_sonnet.md）**
+完整性：登记行、消融行、11/5/0 计数全部不变；summary 的 code 字段记录的是最后一次 evaluate 的代码，非训练代码。
+对主 agent 初读的更正：(1) "失配机制被直接证实"→"在固定标签下复现（RAW@mb −0.015，CI 含 0），且失配方向
+与 LSHIFT 相反，不能说直接证明"；(2) "完全恢复"→"回到 RAW 水平（CI 内）"；(3) "judge 依赖"→"两单元的
+模式，judge×初始化交互未检验（FROZEN t≈−1.4、MAP_ONLY t≈−2.3）"；(4) v4 残留 −0.018 是"持续的点估计、
+CI 含 0"的候选，不是已确立的 map 结构代价；FROZEN 与 MAP_ONLY 共用一个 map，是一个观测而非两次复现；
+(5) "CORR_FROZEN 均值与 LSHIFT 相近"仅对 v4 成立（失配 0.46 vs 0.43），3.5 的失配更大（0.58）却恢复。
+判定（主 arm）：LSHIFT、3.5-flash 的 FROZEN/MAP_ONLY、v4 的 REFIT_n1000（大部分）为偏置初始化伪影；
+v4 的 FROZEN/MAP_ONLY（≈−0.018）与 HUMAN（−0.0096）残留未解决；副 arm 未重训（P3 在副 arm −0.016/−0.031）。
+登记的 P3/P7 未中与 11/5 计数不变，仅在论文中加"登记配方（偏置 1.5）下"的范围限定。
+**不得写**：标签侧校正无排序代价 / P3、P7 是伪影；v4 残留是已证明的 map 代价或是噪声；失配"直接证明"；
+LSHIFT 等于或优于 RAW；HUMAN 差距已解释或 LLM/人类标签可互换；任何每格偏移价格或"NDCG 跟随水平"；
+关于副 arm、3.8、3.5 HUMAN 的任何说法；标签均值偏置是推荐配方；"输出侧平移无排序代价"作为发现（它按构造
+成立）。可选后续（按价值）：副 arm 的 FROZEN/LSHIFT@hb（12 个）；免费的配对比较 MAP_ONLY@hb vs LSHIFT@hb
+与 FROZEN@hb vs LSHIFT@hb；v4/3.5 的 FROZEN 标签对人类分数的 AUC 与 P(相关|judge 1 分)；3.5 HUMAN@hb。
