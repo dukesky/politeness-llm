@@ -1486,3 +1486,40 @@ derived/batch7/b7_summary_hb2d.txt；notebook h8k；代码 95685a9）：
   @hb 之后 LSHIFT 仍显著低于 RAW 0.005–0.007；CORR_FROZEN 的代价在副 arm 基本不由失配解释。因此"初始化伪影"
   的解释是 arm 依赖的：主 arm 全部恢复、副 arm 部分恢复。论文应把 "second arm untested" 改为"第二个 arm 上
   仅部分恢复"，而不是去掉限定。登记的 P3/P7 未中与 11/5 计数不变。
+
+**追加 2d 评估员复核（Sonnet，2026-10-20；内部 docs/evaluator_reports/2026-10-20_b7_headbias3_sonnet.md）**
+完整性：登记行与消融行不变（diff 2d summary vs 2c summary 仅 eval 文件数 219→231 与 code 字段）；主 arm
+11/5/0、P3/P7 两 arm 数值均不变；登记块未被回填 commit 改动。登记的弱点：两个 judge 都没有落入任一分支
+（v4 +0.0050 在灰区；3.5 +0.0110 过增益条但 vs RAW CI 不含 0）；+0.004/+0.008 的阈值细于测量噪声
+（3.5 增益 CI 半宽 0.0085，seed 级 SE ≈0.005）；登记写"沿用 2c"却在分支 1 重新使用"CI 含 0"。
+对主 agent 初读的更正：(1) "约 4 成 / 2/3 被解释"→ 按增益 CI 除以损失，v4 为 0–92%、3.5 为 18–123%，
+不得引用比例，用"contributes"而非"解释"；(2) "仍显著低于 RAW"→ 显著性是三 seed 固定下的 query bootstrap，
+v4 的 seed 级 t=−1.3 与 0 不可区分，3.5 为 −3.3；(3) "CORR_FROZEN 基本不由失配解释"→ 改为"无可检测的恢复"，
+且 3.5 FROZEN 的主 arm 恢复（+0.0184*）在副 arm 不复现（vs RAW −0.0249*）：四个 FROZEN 单元中三个在
+偏置匹配后仍差 0.015–0.025，v4 FROZEN 两个 arm 均无恢复；(4) "主 arm 全部恢复"为误：v4 FROZEN/MAP_ONLY/
+HUMAN 未恢复，REFIT_n1000 恢复大部分；(5) "arm 依赖"未作为交互检验（三个匹配单元 t=−1.5/−1.3/−0.15 同号；
+3.5 LSHIFT 在主 arm 未重训，无匹配对照）；(6) 登记前提"主 arm 上 offset/ratio 均不动"为误：主 arm 的
+FROZEN@hb offset +0.030*、ratio +0.055*，MAP_ONLY@hb +0.050*/+0.105*（反向）；副 arm 四格全部下移；
+offset 变动在 seed 噪声内（t≈−0.4 到 −0.6），"只改了初始化"成立，"operating point 不变"不成立，
+改写为"至多移动 0.05、方向混杂"。
+综合 2/2b/2c/2d（11 个重训单元，事后、非独立）：注册配方平均损失 −0.0189，平均增益 +0.0093，平均残留
+vs RAW −0.0096；增益为正 10/11；残留 ≥0.003 低于 RAW 9/11；仅主 arm v4 LSHIFT 与主 arm 3.5 FROZEN
+回到 RAW 水平。未解释：匹配后 0.005–0.025 的残留；3.5 FROZEN 为何只在一个 arm 恢复；HUMAN 差距。
+唯一的直接失配检验是主 arm RAW@mb，其符号与 LSHIFT 相反且 CI 含 0。
+判定：副 arm 既不复现也不否定主 arm 的恢复；头初始化是校正标签排序代价的一个贡献因素，不是解释。
+Application B 关闭；论文按复核报告 §D 逐句改写（abstract/intro："only partly … in some cells and not
+in others"；§5.7 四段与 Protocol 第 4 步加入副 arm 数字与 11 单元计数；两处加"under the registered recipe"）。
+**不得写**（在 2/2b/2c 的清单之上）：任何"被解释"的比例；"副 arm 复现 / 未迁移"；"主 arm 完全恢复"；
+3.5 的 P3 未中是一般性初始化伪影；"judge 依赖 / arm 依赖"作为已检验发现；残留是标签内容代价、map 代价或噪声；
+"operating point 不变"；把 `*` CI 当作含 seed 方差；SHIFT_FULL@hb 对偏置 1.5 的 HUMAN 作为 LLM vs 人类标签
+的证据；未核实的 3.5 偏置值。后续：不再重训（可选：副 arm v4 RAW@1.07 测 arm 2 对初始化是否较不敏感，
+须先登记宽于 ±0.004 的阈值；无论文句子依赖它）。
+
+**勘误（2026-10-20，评估员发现）**：追加 2d 回填中"3.5 FROZEN 1.011"为抄录错误；train_log.json 的
+head_bias_value 为 v4 CORR_FROZEN 1.0107、v4 SHIFT_FULL 1.0526、3.5 CORR_FROZEN **0.9139**、3.5 SHIFT_FULL 1.0489
+（msmarco-ce，s1；train_log 修改时间 11:43–11:50 UTC，登记 commit 95685a9 为 11:39 UTC）。
+**免费核查（2026-10-20）**：SHIFT_FULL 标签 = clip(RAW − Δ̂, 0, 3)，Δ̂≈0.58 时仅 RAW=0 被截断（→0），RAW=1→0.42>0，
+档位顺序保持、并列仍并列（manifest 记录 offset_vs_human_unclipped）。补做配对比较（主 arm v4-flash，同 query
+bootstrap）：MAP_ONLY@hb − SHIFT_FULL@hb NDCG@10 −0.0196 [−0.031,−0.007]；CORR_FROZEN@hb − SHIFT_FULL@hb
+−0.0203 [−0.037,−0.003]（文件 eval/minilm-raw/deepseek__deepseek-v4-flash/compare_{MAP_ONLY,CORR_FROZEN}@hb_vs_SHIFT_FULL@hb.*）。
+解读待评估员附录。
