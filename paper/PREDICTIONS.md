@@ -1449,3 +1449,22 @@ LSHIFT 等于或优于 RAW；HUMAN 差距已解释或 LLM/人类标签可互换�
 关于副 arm、3.8、3.5 HUMAN 的任何说法；标签均值偏置是推荐配方；"输出侧平移无排序代价"作为发现（它按构造
 成立）。可选后续（按价值）：副 arm 的 FROZEN/LSHIFT@hb（12 个）；免费的配对比较 MAP_ONLY@hb vs LSHIFT@hb
 与 FROZEN@hb vs LSHIFT@hb；v4/3.5 的 FROZEN 标签对人类分数的 AUC 与 P(相关|judge 1 分)；3.5 HUMAN@hb。
+
+## B7 探索性追加 2d（2026-10-20 登记，训练前写下；评估员 2026-10-19 复核列出的首选后续）：副 arm 的偏置重训
+追加 2/2b/2c 全部在主 arm（minilm-raw）上做；副 arm（msmarco-ce，注册配方 3 ep / 3e-5，头部同样重置为
+偏置 1.5）的 P3 未中为 −0.016*（v4-flash）/ −0.031*（3.5-flash），LSHIFT 的注册配方原学生比 RAW 低
+−0.012* / −0.016*，均未重训。本追加用 `ARM=msmarco-ce EP=3 LR=3e-5 HB_SETS="CORR_FROZEN SHIFT_FULL"
+bash scripts/b7_headbias.sh`（偏置=训练集标签均值，tag hb，v4-flash 与 3.5-flash，3 seed，共 12 个学生），
+dl22 三重门控评测，配对比较 @hb vs 原学生 / RAW / HUMAN。
+判据沿用追加 2c：以同集配对差（@hb − 原学生）为主，点估计 vs RAW 为辅。
+- 若 SHIFT_FULL@hb 相对原学生的配对差 ≥ +0.008（约为原 −0.012/−0.016 损失的大半）且 vs RAW 的 CI 含 0
+  → 偏置失配解释在第二个 arm 上复现，论文可去掉"second arm untested"限定，改为"两个 arm 上 LSHIFT 的
+  排序代价均回到 RAW 水平"；
+- 若 SHIFT_FULL@hb 相对原学生的配对差 < +0.004 → 失配解释不跨 arm，§5.7 与 Protocol 第 4 步须写成
+  "仅在主 arm 上观察到"，并保留副 arm 的 −0.012/−0.016 作反例；
+- CORR_FROZEN@hb：v4-flash 预期部分恢复、残留点估计仍为负（与主 arm 的 ≈−0.018 同向）；3.5-flash 预期
+  恢复幅度大于 v4-flash（主 arm 模式）。两者任一反向（@hb 低于原学生）都记为该 judge 的失配解释不成立。
+- 不预测 offset/ratio/F1 变化（主 arm 上均不动，若动则记异常）。
+主 agent 先验：SHIFT_FULL 在两个 judge 上复现；CORR_FROZEN 按 judge 分叉的模式不一定复现（副 arm 的
+预训练排序器可能对标签 map 更不敏感）。无论结果如何，登记的 P3/P7 未中与 11/5 计数不变。
+开箱结果（跑完回填）：
