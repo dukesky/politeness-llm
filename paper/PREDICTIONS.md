@@ -1537,3 +1537,8 @@ b7_hb_perseed.txt，内部 tables/ 同名快照；@hb/@mb − 原学生，同 se
 HUMAN t +1.5、FROZEN t +0.3、MAP_ONLY t −0.7；主 arm 3.5 FROZEN t +1.9、MAP_ONLY t +2.5；副 arm v4 LSHIFT
 +0.0046/+0.0113/−0.0010（t +1.4）、FROZEN t +0.1；3.5 LSHIFT +0.0177/+0.0045/+0.0109（t +2.9）、FROZEN t +1.1。
 seed 配对读数与 query bootstrap 读数方向一致；副 arm v4 LSHIFT 的增益在 seed 层面与 0 不可区分。
+**追加 2d 评估员终审（§H，2026-10-20）**：Application B 关闭。主 arm 按 seed 配对结果支持现有措辞（LSHIFT、REFIT 三个
+seed 全正，RAW@mb 三个 seed 全负——"在固定标签下于三个 seed 全部复现"，但其失配方向与 LSHIFT 相反，仍非证明）。
+论文两处补充：副 arm 增益后加"seed-level paired t=1.4 and 2.9, 2 df"并改为 "may contribute"；G.3 句后加
+"In the second arm the same contrast was −0.008 (CI includes 0) for v4 and −0.020 for 3.5"。
+**不得写（25）**：引用 df=2 的 p 值作为确认；称 map-vs-shift 对比为一般性结论（4 个 CI 仅 2 个不含 0）。
