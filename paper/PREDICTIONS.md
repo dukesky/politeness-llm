@@ -1523,3 +1523,17 @@ head_bias_value 为 v4 CORR_FROZEN 1.0107、v4 SHIFT_FULL 1.0526、3.5 CORR_FROZ
 bootstrap）：MAP_ONLY@hb − SHIFT_FULL@hb NDCG@10 −0.0196 [−0.031,−0.007]；CORR_FROZEN@hb − SHIFT_FULL@hb
 −0.0203 [−0.037,−0.003]（文件 eval/minilm-raw/deepseek__deepseek-v4-flash/compare_{MAP_ONLY,CORR_FROZEN}@hb_vs_SHIFT_FULL@hb.*）。
 解读待评估员附录。
+**追加 2d 评估员附录 G（2026-10-20）与补做核查**：3.5 FROZEN 失配为 0.586（v4 0.489），其副 arm 弱恢复（+0.0058）
+因此更清楚地不是失配驱动；截断核查关闭（仅 RAW=0 被截断，顺序保持）。新配对比较是 vs-RAW 残留的算术等价
+（−0.0184 − 0.0019），只增加精度不增加事实；支持 v4 主 arm 上"离散 map 与连续平移"的标签形式差异，但不确立
+map 结构机制（FROZEN/MAP_ONLY 共用一个 map = 一次观测；CI 以已训 seed 为条件；对比为事后选择）。论文 §5.7
+加一句（已加）："At matched initialisation in the main arm, v4's map-only and frozen-rule students ranked 0.020
+below the label-shifted student (CIs −0.031 to −0.007 and −0.037 to −0.003, conditional on the trained seeds;
+one judge, one arm)."  **不得写（24）**：把它推广为"离散 map 相对连续平移代价 0.02"适用于 3.5 或副 arm，或称之为机制。
+补做：副 arm CORR_FROZEN@hb − SHIFT_FULL@hb：v4 −0.0080 [−0.023,+0.006]，3.5 −0.0197 [−0.030,−0.010]
+（文件 eval/msmarco-ce/*/compare_CORR_FROZEN@hb_vs_SHIFT_FULL@hb.*）。按 seed 配对表（Drive derived/batch7/
+b7_hb_perseed.txt，内部 tables/ 同名快照；@hb/@mb − 原学生，同 seed 共享头权重与 batch 顺序；df=2）：
+主 arm v4 LSHIFT +0.0185/+0.0237/+0.0073（t +3.4）、REFIT_n1000 t +3.5、RAW@mb −0.0238/−0.0090/−0.0122（t −3.3）、
+HUMAN t +1.5、FROZEN t +0.3、MAP_ONLY t −0.7；主 arm 3.5 FROZEN t +1.9、MAP_ONLY t +2.5；副 arm v4 LSHIFT
++0.0046/+0.0113/−0.0010（t +1.4）、FROZEN t +0.1；3.5 LSHIFT +0.0177/+0.0045/+0.0109（t +2.9）、FROZEN t +1.1。
+seed 配对读数与 query bootstrap 读数方向一致；副 arm v4 LSHIFT 的增益在 seed 层面与 0 不可区分。
