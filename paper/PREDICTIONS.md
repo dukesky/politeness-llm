@@ -1542,3 +1542,83 @@ seed 全正，RAW@mb 三个 seed 全负——"在固定标签下于三个 seed �
 论文两处补充：副 arm 增益后加"seed-level paired t=1.4 and 2.9, 2 df"并改为 "may contribute"；G.3 句后加
 "In the second arm the same contrast was −0.008 (CI includes 0) for v4 and −0.020 for 3.5"。
 **不得写（25）**：引用 df=2 的 p 值作为确认；称 map-vs-shift 对比为一般性结论（4 个 CI 仅 2 个不含 0）。
+
+# DE 预注册 — 决策错误率（scripts/decision_errors.py）
+
+登记时间：2026-10-21（commit 时间戳为准；登记块由 paste 于 2026-10-20 12:19 UTC 打印，用户 2026-10-21 批准）。分析代码 git hash：b0c15bb。
+顺序：fit-lodo-rules → paste → 本块 commit → run（d2-pool / d1-b5 / d3-validate / d1-students [/ local-calib]）。
+
+## 输入 sha256（run 时逐个核对，不符或缺失即中止）
+- sha256[correction_rules.json]: c93876126540819780ed59f36ed1afd298594b4309b9a77376ff8b01c6417293
+- sha256[rules_lodo.json]: 01db16c1031833612b182c266d07e419064b27599887c62cf2c6156a0582b621
+- sha256[batch6_labels_dl22.parquet]: dbb9ffab950e92595c6cc01aad103615d7bb0c14e17290c3692915c712c7f04a
+- sha256[batch6_labels_dl21.parquet]: 82827b8296e07b73aacc7ef95ad9695c5169e9add95c54cf7578f5d278f7fc0b
+- sha256[batch6_labels_antique.parquet]: 4b0c235cd2b8e6b60210ea0d8d0bd0d73c4acbe8aaf63db188ff106e2181a340
+- sha256[b7_universe_dl22]: e63c9a7096e5294ea112da7b39f5807d29a1419a4c3b9085f4eb005c2f4617d7（B7 dl22 universe_sha256，全部 eval 文件一致）
+- sha256[b5_per_system_ndcg.csv]: 9996ef31012c333f9bf967a3cd35b1ce2b6f27f1938b68d9e7aefa281049f7bf
+
+## LODO 规则（dl19+dl20 拟合，dial 限定 {L1, L3}：B5 的 325 对 top-up 只有 L1/L3）
+- deepseek/deepseek-v4-flash: dial=L1（无约束 L1）map=[0, 0, 2, 3] Δ̂=+0.5431
+- google/gemini-3.5-flash: dial=L1（无约束 L1）map=[0, 0, 2, 3] Δ̂=+0.4798
+- deepseek/deepseek-v4.1-flash: 未拟合（no dl19/dl20 rows）→ 无 LODO arm
+- google/gemini-3.8-flash: 未拟合（no dl19/dl20 rows）→ 无 LODO arm
+
+## 判定纪律（逐字；代码同文打印）
+1. 方向一律按点估计判定：Δerr = err(arm) − err(RAW)；|Δerr| ≤ 0.02 为 tie（代码硬编码 TIE = 0.02）。
+2. 预测"降"：Δerr < −0.02 记命中，Δerr > +0.02 记未中，否则 tie；"升"方向相反；"平"：|Δerr| ≤ 0.02 记命中，否刚未中。tie 既不计命中也不计未中。
+3. 水平预测（≥x / ≤x）作用于该 arm 自身 err 的点估计，无 tie 带。
+4. 90% CI（query bootstrap 百分位）单独报告为"显著"与否，永不改变判定。
+5. no-op 单元（冻结规则 identity@L3）：FROZEN/CORR ≡ RAW 逐位相同、Δerr ≡ 0（含 bootstrap），由代码 hard-fail 断言，不计分。
+6. D2 的 dl21（部分 in-sample）与 antique（完全 in-sample）上 FROZEN / SHIFT_FROZEN 只报告不判定；REFIT（query-disjoint 交叉拟合）处处可判。
+7. D1b / D1b_best / D1a_place 为描述性，不登记。
+
+## 单元与网格（计数来自文件名/列，不含任何人类标签或一致性数值）
+- 相关 = grade ≥ 2；tie 带 0.02；90% 百分位 CI；seed 42。
+- D2 dl22（held-out，主终点）：K ∈ [1, 3, 5, 10]（K=1 记 D2a），D2c 容差 0.2；B=1000；单元 v4-flash=76q/L1，v4.1-flash=76q/L1，gemini-3.5-flash=76q/L1，gemini-3.8-flash=76q/no-op，claude-opus-5(40%)=76q/L2，gpt-5.6-sol(40%)=76q/L1
+- D2 dl21（in-sample，只报告）：K ∈ [1, 3, 5, 10]（K=1 记 D2a），D2c 容差 0.2；B=1000；单元 v4-flash=53q/L1，v4.1-flash=53q/L1，gemini-3.5-flash=53q/L1，gemini-3.8-flash=53q/no-op，claude-opus-5(40%)=53q/L2，gpt-5.6-sol(40%)=53q/L1
+- D2 antique（in-sample，只报告）：K ∈ [1, 2, 3]（K=1 记 D2a），D2c 容差 0.2；B=1000；单元 v4-flash=200q/L3，v4.1-flash=200q/L4，gemini-3.5-flash=200q/L2，gemini-3.8-flash=200q/L1，claude-opus-5(40%)=200q/L5，gpt-5.6-sol(40%)=200q/L2
+- D1-b5 dl21：13 系统 × 4 judge（v4-flash，v4.1-flash，gemini-3.5-flash，gemini-3.8-flash），B5 universe（53 judged queries 上限）；τ 网格 0.30–0.80 步长 0.01（51 点）；margin m ∈ [0.0, 0.01, 0.02, 0.05]；α=0.05；B=2000；arm RAW/CORR/SHIFT_FROZEN/CORR_LODO/SHIFT_LODO。
+- D3 / D1-dl22 学生单元：192 个 eval 文件（minilm-raw/deepseek__deepseek-v4-flash=36，minilm-raw/google__gemini-3.5-flash=36，minilm-raw/google__gemini-3.8-flash=24，msmarco-ce/deepseek__deepseek-v4-flash=36，msmarco-ce/google__gemini-3.5-flash=36，msmarco-ce/google__gemini-3.8-flash=24）；排除 39 个（'@tag' 探索性重训等）。
+  - evaluator deepseek/deepseek-v4.1-flash（主）：192 学生（排除同 teacher 0）
+  - evaluator deepseek/deepseek-v4-flash：120 学生（排除同 teacher 72）
+  - evaluator google/gemini-3.5-flash：120 学生（排除同 teacher 72）
+  - evaluator google/gemini-3.8-flash：144 学生（排除同 teacher 48）
+  通过规则：|mean clip(pred) − mean 测试标签| ≤ 0.25 且 ratio@2 ∈ [0.8, 1.25]；B=1000；seed 方差不进 CI。D1-dl22 caveat：学生 NDCG 带窄（~0.43–0.47），跨尺度误差被放大。
+- local-calib（可选）：n=200 校准对（整 query），R=200 次 query-disjoint 切分；SHIFT_n、METRIC_SHIFT_n；全部 arm 只在留出 query 上重算。
+
+## 盲态声明
+- D2（dl22 主终点）：blind — per-query 决策错误从未计算；B6 聚合终点（E1/E2 比例）已开箱并见过
+- D1-b5（dl21）：non-blind — B5 逐系统点估计（b5_per_system_ndcg.csv、Fig. 5）已见；bootstrap 分布与 LODO arm 为新
+- D3（dl22）：blind — 学生在 judge 测试标签下的通过/失败从未计算；学生对人类标签的 offset/ratio（B7）已见
+- D1-dl22（学生当系统）：blind — 学生在 judge 标签下的 NDCG 从未计算；人类标签下的 NDCG（B7）已见
+
+## 预测（键 = decision|dataset|judge|arm|grid；token：降 / 升 / 平 或 ≥x / ≤x；可增删行，格式不变）
+主终点：
+- DE[D2a|dl22|deepseek/deepseek-v4-flash|FROZEN|K=1] D2 K=1 FROZEN−RAW｜预测：平
+- DE[D2b|dl22|deepseek/deepseek-v4-flash|FROZEN|K=3] D2 K=3 FROZEN−RAW｜预测：降
+- DE[D2a|dl22|deepseek/deepseek-v4.1-flash|FROZEN|K=1] D2 K=1 FROZEN−RAW｜预测：平
+- DE[D2b|dl22|deepseek/deepseek-v4.1-flash|FROZEN|K=3] D2 K=3 FROZEN−RAW｜预测：降
+- DE[D2a|dl22|google/gemini-3.5-flash|FROZEN|K=1] D2 K=1 FROZEN−RAW｜预测：平
+- DE[D2b|dl22|google/gemini-3.5-flash|FROZEN|K=3] D2 K=3 FROZEN−RAW｜预测：降
+- DE[D2a|dl22|anthropic/claude-opus-5|FROZEN|K=1] D2 K=1 FROZEN−RAW｜预测：平
+- DE[D2b|dl22|anthropic/claude-opus-5|FROZEN|K=3] D2 K=3 FROZEN−RAW｜预测：降
+- DE[D2a|dl22|openai/gpt-5.6-sol|FROZEN|K=1] D2 K=1 FROZEN−RAW｜预测：平
+- DE[D2b|dl22|openai/gpt-5.6-sol|FROZEN|K=3] D2 K=3 FROZEN−RAW｜预测：降
+- DE[D1a|dl21|deepseek/deepseek-v4-flash|CORR|-] D1a 排行榜放置 CORR−RAW｜预测：降
+- DE[D3|dl22|deepseek/deepseek-v4.1-flash|FROZEN|all] D3 FROZEN−RAW｜预测：降
+- DE[D3|dl22|deepseek/deepseek-v4.1-flash|RAW|all] D3 RAW 误判率水平｜预测：≥0.30
+- DE[D1a|dl22|deepseek/deepseek-v4.1-flash|FROZEN|-] D1a 学生当系统 FROZEN−RAW｜预测：降
+次要（可删）：
+- DE[D1c|dl21|deepseek/deepseek-v4-flash|CORR|m=0] 同尺度 A 胜 B，CORR−RAW｜预测：平
+- DE[D1c|dl21|deepseek/deepseek-v4.1-flash|CORR|m=0] 同尺度 A 胜 B，CORR−RAW｜预测：平
+- DE[D1c|dl21|google/gemini-3.5-flash|CORR|m=0] 同尺度 A 胜 B，CORR−RAW｜预测：平
+主 agent 先验与总体判读（不计分，登记时写下）：
+- 机制：跨刻度决策（D2、D1a、D3）的错误率随 |mean offset| 变化，校正把 offset 拉向 0 即降错；同刻度决策（D1c）不受 offset 影响，预测全平。若 D1c 出现"降"，说明校正改变了系统间顺序，与 B5 的 Δτ 结论冲突，须如实报告。
+- D2 K=3：5 个单元至少 4 个"降"记总体命中；K=1 两边错误率都低，冻结规则的过度校正倾向（B6 中位 ratio 0.55）可能使其略升，故押"平"。
+- D1a dl21：raw 分数整体高约 +0.10（13 系统），用 judge 分数对照已发表人类分数会把 BM25 变体放到 doc2query 之上；CORR 后几乎重合。CORR_LODO 并列报告，若 CORR 降而 CORR_LODO 不降，判定改记"in-sample 依赖"。
+- D3：raw 学生在 raw 测试标签下通过、人类标签下不通过，校正/人类学生相反，先验误判率 0.5–0.7，登记保守下界 ≥0.30；FROZEN 测试标签更接近人类刻度，押"降"。
+- D1-dl22：学生 NDCG 带窄，两边错误率都高，降幅预计小于 dl21；仍押"降"。
+- 3.5-flash 的 dl21 D1a（次要，不登记）：B6/B5 中其 CORR 的 |offset| 与 RAW 相近（+0.055 vs −0.058），机制上应为 tie，作为机制规则的非正式检验。
+结构性（不计分，代码 hard-fail）：
+- google/gemini-3.8-flash：identity@L3 → FROZEN/CORR ≡ RAW，全部决策 Δerr ≡ 0
+- 开箱结果（run 后回填）：
