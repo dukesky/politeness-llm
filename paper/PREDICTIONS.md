@@ -1622,3 +1622,51 @@ seed 全正，RAW@mb 三个 seed 全负——"在固定标签下于三个 seed �
 结构性（不计分，代码 hard-fail）：
 - google/gemini-3.8-flash：identity@L3 → FROZEN/CORR ≡ RAW，全部决策 Δerr ≡ 0
 - 开箱结果（run 后回填）：
+2026-10-25 开箱（run 于登记 commit 272344a 之后；代码 b0c15bb；gate 通过：标题存在、PREDICTIONS.md 干净已提交、
+全部输入 sha256 与登记一致；dl22 以 --unseal-dl22 解封；no-op 单元（3.8-flash identity@L3）在 D2/D1-b5/D3/
+D1-dl22 均逐位相同、Δerr≡0 OK；B5 完整性核对 max|diff| 5e-5 ≤ 1e-4 OK；D2 三个数据集的重算标签与存档 parquet
+逐位相同。原始输出：Drive derived/decision_errors/{de_d2,de_d1b5,de_d3,de_d1students}.txt、de_*.json、
+de_summary.csv；内部 repo paper/sigir27/tables/de/ 有快照）。
+
+逐条判定（点估计；tie 带 0.02；err = 决策与人类标签决策不一致的比例）：
+- DE[D2a|dl22|v4-flash|FROZEN|K=1] 平：err 0.171（RAW 0.145）Δ +0.026 [−0.013,+0.066] → **MISS**（升）
+- DE[D2b|dl22|v4-flash|FROZEN|K=3] 降：err 0.237（RAW 0.303）Δ −0.066 [−0.132,+0.000] → **HIT**
+- DE[D2a|dl22|v4.1-flash|FROZEN|K=1] 平：err 0.158（RAW 0.184）Δ −0.026 [−0.079,+0.026] → **MISS**（降）
+- DE[D2b|dl22|v4.1-flash|FROZEN|K=3] 降：err 0.316（RAW 0.250）Δ +0.066 [−0.013,+0.145] → **MISS**（升）
+- DE[D2a|dl22|3.5-flash|FROZEN|K=1] 平：err 0.224（RAW 0.184）Δ +0.039 [−0.026,+0.105] → **MISS**（升）
+- DE[D2b|dl22|3.5-flash|FROZEN|K=3] 降：err 0.250（RAW 0.224）Δ +0.026 [−0.026,+0.079] → **MISS**（升）
+- DE[D2a|dl22|opus-5|FROZEN|K=1] 平：err 0.171（RAW 0.171）Δ 0.000 → **HIT**
+- DE[D2b|dl22|opus-5|FROZEN|K=3] 降：err 0.184（RAW 0.250）Δ −0.066 [−0.118,−0.026] → **HIT**
+- DE[D2a|dl22|gpt-5.6-sol|FROZEN|K=1] 平：err 0.171（RAW 0.158）Δ +0.013 [−0.026,+0.053] → **HIT**
+- DE[D2b|dl22|gpt-5.6-sol|FROZEN|K=3] 降：err 0.250（RAW 0.263）Δ −0.013 [−0.066,+0.039] → **TIE**
+- DE[D1a|dl21|v4-flash|CORR|-] 降：err 0.135（RAW 0.308）Δ −0.173 [−0.301,+0.000] → **HIT**（CORR_LODO 同规则、同值）
+- DE[D3|dl22|v4.1-flash|FROZEN|all] 降：err 0.141（RAW 0.557）Δ −0.417 [−0.458,−0.266] → **HIT**
+- DE[D3|dl22|v4.1-flash|RAW|all] ≥0.30：err 0.557 [0.406,0.677] → **HIT**
+- DE[D1a|dl22|v4.1-flash|FROZEN|-] 降：err 0.247（RAW 0.249）Δ −0.002 [−0.062,+0.006] → **TIE**
+- DE[D1c|dl21|v4-flash|CORR|m=0] 平：err 0.051（RAW 0.154）Δ −0.103 [−0.103,+0.038] → **MISS**（降）
+- DE[D1c|dl21|v4.1-flash|CORR|m=0] 平：err 0.115（RAW 0.115）Δ 0.000 → **HIT**
+- DE[D1c|dl21|3.5-flash|CORR|m=0] 平：err 0.128（RAW 0.103）Δ +0.026 [−0.064,+0.051] → **MISS**（升）
+**计数：HIT 8 / MISS 7 / TIE 2**（主终点 14 条：HIT 7 / MISS 5 / TIE 2；D2 K=3 "≥4/5 降"的总体判读未达成：2 降 / 2 升 / 1 平）。
+
+描述性（不计分）：
+- D2 dl22 其他网格：K=5 时 FROZEN 低于 RAW 的有 v4 −0.079、v4.1 −0.079、3.5 −0.066*（opus/gpt 不动）；K=10 时 v4/v4.1
+  −0.066，3.5/opus/gpt 不动；SHIFT_FROZEN 在 K=1 明显更差（v4.1 +0.289*，v4/gpt +0.132*）而在 K=10 明显更好
+  （v4 −0.158*，v4.1 −0.118*）；REFIT 与 FROZEN 基本同向。D2c（每查询相关数在 ±20% 内）：所有 arm 错误率
+  0.54–0.82，无一 arm 变动超过 0.08。D2 dl21（部分 in-sample）K=3 全部 tie；antique（in-sample）K=2 FROZEN 低
+  0.03（4/6 单元，CI 不含 0）。
+- D1-b5 dl21：系统均值 NDCG 相对人类的 offset：v4 RAW +0.106 / CORR −0.004；v4.1 +0.121 / −0.031；3.5 +0.055 /
+  −0.058；3.8 +0.031（no-op）。D1a：v4.1 CORR 0.314→0.276（−0.038），SHIFT_FROZEN 0.179（−0.135*）；3.5 CORR
+  0.308→0.308（tie，与登记"机制规则"的非正式预期一致：|offset| 0.055 vs 0.058）。D1b（过阈值，描述性）：v4 CORR
+  0.208→0.026、v4.1 0.235→0.063、3.5 0.107→0.115。D1c_sig（配对 t 显著性一致）：v4 −0.051、v4.1 −0.026、3.5 0。
+- D3 dl22（v4.1 评估 judge，192 学生）：分 arm RAW 0.344（minilm）/ 0.771（msmarco-ce），FROZEN 0.063 / 0.219；
+  成分：仅 offset 判据 RAW 0.958 → FROZEN 0.307，仅 ratio 判据 0.615 → 0.104；SHIFT_FROZEN 0.229（−0.328*）。
+  其他评估 judge（排除同 teacher）：v4 RAW 0.558 → FROZEN 0.158；3.5 0.217 → 0.117；3.8（no-op）0.208 = 0.208。
+- D1-dl22（学生当系统，v4.1 评估）：学生 NDCG 相对人类 offset RAW +0.108、FROZEN −0.084、SHIFT_FROZEN −0.031
+  → FROZEN 的过度校正幅度与 RAW 的偏差相当，错误率不动（0.247 vs 0.249）；SHIFT_FROZEN 0.196（−0.053*）。
+  D1c dl22 m=0：FROZEN 比 RAW 高 +0.04～+0.08（CI 含 0，三个 judge 同向）。
+- 主 agent 初读（待复核）：(1) 聚合层面的跨刻度决策（D1a dl21 v4、D3）错误率随 |mean offset| 缩小而大幅下降
+  （0.31→0.13；0.56→0.14），这是 so what 的正面证据；(2) 决策错误跟随 |offset| 而非其符号——冻结规则过度
+  校正到另一侧时（学生当系统 −0.084 vs +0.108；3.5 dl21 −0.058 vs +0.055）错误率不降，与 B6 的"均值过度校正"
+  一致；(3) 每查询的 K 相关数决策（D2）由查询内方差主导，均值校正只能移动 ≤0.08 且方向不稳，5 个 K=3 单元
+  2 降 2 升 1 平，登记预测未中，按未中进论文；(4) 同刻度决策 D1c 并非一律中性：v4 的 CORR 让成对比较与人类的
+  一致性提高（0.154→0.051），3.5 略降，与 B5 的 Δτ 方向（v4 +0.205、3.5 −0.051，均不显著）一致，须如实报告。
