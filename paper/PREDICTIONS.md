@@ -1714,3 +1714,18 @@ D3 的 56% 作为一般比率、"FROZEN 正确验收学生"、省略平凡基线
 后续建议（评估员）：local-calib 低价值（已在跑，作附录诊断，先登记"post-DE, pre-local-calib: semi-blind"，预测无
 arm 超过 FROZEN 的切分间离散）；更值得做（纯 CPU）：D2 加交叉拟合 RETHRESH 基线、D2/D3 平凡基线列、D3 对 64 个
 配置 × 查询的聚类 bootstrap 与按训练标签类分组、D1a 常数偏移曲线附录图替代 D1a-dl22 行、补 JSON meta 入快照。
+
+## DE 探索性追加：local-calib（2026-10-25 跑；非预注册、不计分；评估员建议低价值、仅作附录诊断）
+设置：n=200 校准对（整 query，MS MARCO 约 7–8 个查询），R=200 次 query-disjoint 切分，全部 arm 只在留出 query
+上重算；SHIFT_n200 = 用校准对估计的 Δ̂ 做输出侧平移；METRIC_SHIFT_n200 = 用校准 query 上 mean NDCG(RAW−HUMAN) 直接
+修正系统分数。报告为切分均值与 [5%,95%] 切分分位数（非 bootstrap）。评估员事前预测（报告 §F，结果前写下）：
+无 arm 超过 FROZEN 的切分间离散。
+结果（Drive derived/decision_errors/de_lc.txt、de_summary_local-calib.csv；内部 tables/de/ 快照）：
+- D2 dl22 K=3：SHIFT_n200 vs RAW：v4 0.000、v4.1 +0.093、3.5 +0.037、opus −0.032、gpt −0.035（切分分位宽 0.04–0.21）；
+  与 FROZEN 同向或更差，无一处优于 FROZEN 超出离散。K=5：SHIFT_n200 −0.067 / −0.032 / −0.035（三个 flash），
+  与 FROZEN −0.079 / −0.077 / −0.065 同向略弱。dl21 同样无信号。
+- D1a dl21：METRIC_SHIFT_n200 vs RAW：v4 −0.036 [−0.205,+0.033]、v4.1 −0.064 [−0.218,+0.006]、3.5 −0.034 [−0.193,
+  +0.052]、3.8 +0.020；SHIFT_n200：v4 −0.036、v4.1 −0.083、3.5 −0.012；CORR（切分留出 query 上重算）v4 −0.170、
+  v4.1 −0.067、3.5 −0.001。即 200 对校准的直接度量修正在 D1a 上给出小而宽的改善，不及 v4 的 CORR，
+  与 3.5 的 CORR 相当（两者都在阶跃平台附近）。
+- 判读：与评估员预测一致——无 arm 超过 FROZEN 的切分间离散；不进正文，不进 abstract。
