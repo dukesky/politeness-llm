@@ -97,6 +97,39 @@ Studies (subcommands)
                   and EVERY arm (incl. RAW / CORR / HUMAN) is recomputed on
                   the held-out queries only, so the comparison stays paired.
                   Reported: mean over splits and 5/95% split percentiles.
+  addons          EXPLORATORY add-ons pre-announced in PREDICTIONS.md
+                  "## DE 探索性追加 2" (semi-blind, descriptive, never
+                  scored).  --parts rethresh,trivial,d3cluster,d1curve,meta
+                  (default all); same gate as the other subcommands plus the
+                  add-on heading inside the committed DE block; --unseal-dl22
+                  for any dl22 part; registered input sha256s checked.
+                    rethresh   D2 + RETHRESH: cross-fitted (B6 REFIT folds,
+                               fold_of(ds, qid, 42)) one-parameter threshold
+                               on the L3 record mean (B6 rethresh_cache grid
+                               mean >= t/K), t chosen on the train fold so
+                               that the judge relevant rate matches the
+                               human one (ties -> RAW t, then lower t);
+                               plus RETHRESH_K = B6 followup2's train-kappa
+                               objective (b6.rt_crossfit verbatim).  D2a /
+                               D2b / D2c as d2-pool (same universe hard-
+                               check, same boot_indices, paired Δ vs RAW).
+                    trivial    D2 ALWAYS_YES / ALWAYS_NO (D2a, D2b; no D2c);
+                               D3 ALWAYS_FAIL / ALWAYS_PASS per evaluator;
+                               share of zero-human-relevant queries.
+                    d3cluster  D3 with the configurations (arm x teacher x
+                               set; seeds together) resampled jointly with
+                               the queries (B=1000, seed 42), D3cl rows;
+                               label-class split (D3grp:<data-driven class>,
+                               D3grpspec:<spec class>).
+                    d1curve    D1a error of "H(s)+δ > H(r)" vs "H(s) > H(r)"
+                               for δ in [-0.15, 0.15] step 0.005 on the B5
+                               pool HUMAN vector and each evaluator's
+                               student HUMAN NDCG vector, with the observed
+                               (mean offset, D1a) points of de_d1-*.json.
+                    meta       registration_commit / git_hash / code_dirty /
+                               timestamp of every de_*.json -> de_meta.txt.
+                  Outputs de_addons_<part>.json, de_summary_addons.csv (same
+                  columns; the registered de_summary.csv is not touched).
   selftest        synthetic, offline: every decision function, the bootstrap,
                   the no-op assertions, the registration gate (temp git repo,
                   fake PREDICTIONS.md), sha checks, the paste format and the
@@ -133,6 +166,7 @@ Usage (Colab, repo root, after the registration commit):
     python scripts/decision_errors.py d3-validate --unseal-dl22
     python scripts/decision_errors.py d1-students --unseal-dl22
     python scripts/decision_errors.py local-calib --unseal-dl22      # optional
+    python scripts/decision_errors.py addons --unseal-dl22           # add-ons
     python scripts/decision_errors.py selftest
 CPU only, no API calls.
 """
@@ -557,7 +591,8 @@ def b6_labels_path(data_dir: Path, ds: str) -> Path:
 
 def cell_labels(model: str, ds: str, df: pd.DataFrame, qrels: dict,
                 rules_all: dict, flagships, data_dir: Path, stored,
-                frozen_pairs: dict, seed: int = SEED) -> dict:
+                frozen_pairs: dict, seed: int = SEED,
+                keep_cell: bool = False) -> dict:
     """Recompute batch6's universe + RAW/FROZEN/REFIT for one (judge, ds),
     hard-check them against the stored batch6_labels file (batch6
     check_stored, as `followup` does) and add SHIFT_FROZEN."""
@@ -601,10 +636,14 @@ def cell_labels(model: str, ds: str, df: pd.DataFrame, qrels: dict,
             "flagship": restricted, "universe": cell["universe"],
             "qid": [k[0] for k in cell["universe"]], "human": cell["h"],
             "labels": labels, "l3_mean": l3_mean, "refit_seeds": seeds,
-            "check": status}
+            "check": status,
+            **({"cell": {k: v for k, v in cell.items()        # RETHRESH;
+                         if k not in ("d", "d_full")}}       # frames dropped
+               if keep_cell else {})}
 
 
-def load_cells(args, datasets, judges, need_labels=True) -> tuple:
+def load_cells(args, datasets, judges, need_labels=True,
+               keep_cell: bool = False) -> tuple:
     """Shared loader: judgments + qrels + rules + stored labels per dataset."""
     data_dir = b5.resolve_data_dir(args.data_dir)
     rules_all, rules_path, rsha = b6.load_rules(data_dir, args.rules)
@@ -621,7 +660,8 @@ def load_cells(args, datasets, judges, need_labels=True) -> tuple:
         if stored is None:
             sys.exit(f"ERROR: {sp} not found — run batch6 `run` first.")
         out[ds] = [cell_labels(m, ds, df, qrels, rules_all, flagships,
-                               data_dir, stored, frozen_pairs)
+                               data_dir, stored, frozen_pairs,
+                               keep_cell=keep_cell)
                    for m in judges]
     return out, rules_all, rules_path, rsha, data_dir
 
@@ -1683,6 +1723,904 @@ def run_local_calib(args, reg, shas, studies, datasets) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# addons — "DE 探索性追加 2" (pre-announced 2026-10-25, commit 9b69cfc;
+# semi-blind, DESCRIPTIVE, never scored)
+# ═══════════════════════════════════════════════════════════════════════════
+
+ADDONS_MARKER = "DE 探索性追加 2"
+ADDON_PARTS = ("rethresh", "trivial", "d3cluster", "d1curve", "meta")
+RT_ADDON_ARMS = ("RETHRESH", "RETHRESH_K")
+D2_TRIVIAL_ARMS = ("ALWAYS_YES", "ALWAYS_NO")
+D3_TRIVIAL_ARMS = ("ALWAYS_FAIL", "ALWAYS_PASS")
+D3_ARMS = ("RAW", "FROZEN", "SHIFT_FROZEN")
+CURVE_DELTAS = np.round(np.arange(-0.15, 0.15 + 1e-9, 0.005), 3)
+CROSS_TOL = 1e-12
+# label-class split (spec grouping, PREDICTIONS.md "DE 探索性追加 2" item 3)
+SPEC_CLASSES = {
+    "raw-scale": ("RAW", "MIX_200", "MIX_1000", "DIAL_ONLY"),
+    "human-scale": ("HUMAN", "SHIFT_FULL", "SHIFT_n1000"),
+    "corrected-trained": ("CORR_FROZEN", "CORR_REFIT", "CORR_REFIT_n200",
+                          "CORR_REFIT_n1000", "MAP_ONLY"),
+}
+# data-driven rule on r = (mean_set - mean_HUMAN) / (mean_RAW - mean_HUMAN),
+# both differences pooled over the teachers that have the set
+CLASS_HI, CLASS_LO = 2.0 / 3.0, 1.0 / 3.0
+CLASS_RULE = (f"r = mean_teachers(m_set - m_HUMAN) / mean_teachers(m_RAW - "
+              f"m_HUMAN) over the teachers that have the set (m = training-"
+              f"label mean, eval JSON 'train_label_mean', fallback manifest "
+              f"summary mean); r >= {CLASS_HI:.3f} -> raw-scale, r <= "
+              f"{CLASS_LO:.3f} -> human-scale (incl. below-human), otherwise "
+              f"-> intermediate (the data-driven counterpart of "
+              f"'corrected-trained')")
+DATA_CLASS_OF_SPEC = {"raw-scale": "raw-scale", "human-scale": "human-scale",
+                      "corrected-trained": "intermediate"}
+ADDON_NOTE = ("EXPLORATORY add-on (PREDICTIONS.md 'DE 探索性追加 2'): "
+              "semi-blind (DE main results and the evaluator review were "
+              "seen), descriptive, never scored")
+
+
+def addons_gate(dl22: bool, unseal: bool, path: Path,
+                clean_fn=b7.file_committed) -> dict:
+    """de_gate + the add-on block must sit inside the committed DE block."""
+    reg = de_gate(dl22, unseal, path, clean_fn)
+    block = de_block(path.read_text(encoding="utf-8")) or ""
+    if ADDONS_MARKER not in block:
+        sys.exit(f"ERROR: {path}: the DE block has no '{ADDONS_MARKER}' "
+                 f"pre-announcement. Commit it before running `addons`.")
+    rc, out = _git_in(path, "log", "--reverse", "--format=%H,%cI", "-S",
+                      ADDONS_MARKER, "--", path.name)
+    reg["addons_commit"] = out.splitlines()[0] if rc == 0 and out else None
+    return reg
+
+
+def addon_part_of(r: dict) -> str:
+    dec, arm = str(r["decision"]), str(r["arm"])
+    if dec.startswith(("D3cl", "D3grp")):
+        return "d3cluster"
+    if dec.startswith("D1curve"):
+        return "d1curve"
+    if arm in RT_ADDON_ARMS:
+        return "rethresh"
+    if arm.startswith("ALWAYS_"):
+        return "trivial"
+    return "other"
+
+
+def write_addons_summary(data_dir: Path, rows: list[dict]) -> Path:
+    """de_summary_addons.csv (same columns as de_summary.csv).  Rows of the
+    (part, dataset) combinations produced now replace the old ones; the
+    registered de_summary.csv is NOT rebuilt (add-ons never enter it)."""
+    p = out_dir(data_dir) / "de_summary_addons.csv"
+    new = {(addon_part_of(r), r["dataset"]) for r in rows}
+    old = []
+    if p.exists():
+        with open(p, newline="", encoding="utf-8") as f:
+            old = [r for r in csv.DictReader(f)
+                   if (addon_part_of(r), r["dataset"]) not in new]
+    with open(p, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(CSV_COLS)
+        for r in old:
+            w.writerow([r[c] for c in CSV_COLS])
+        for r in rows:
+            w.writerow([_fmt_csv(r[c]) for c in CSV_COLS])
+    print(f"[csv] wrote {p} ({len(rows)} new row(s), {len(old)} kept)")
+    return p
+
+
+def _load_json(p: Path):
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+# ── 1. RETHRESH (D2) ───────────────────────────────────────────────────────
+
+def rate_pick(rc: dict, fc: dict, w: np.ndarray) -> tuple[int, dict]:
+    """ONE threshold t on the L3 record mean (B6 rethresh_cache grid:
+    relevant iff mean >= t/K) chosen on query weights ``w`` so that the
+    judge relevant rate matches the human relevant rate (min |gap|); ties ->
+    the RAW-equivalent t first, then lower t (B6 rt_pick order)."""
+    w = np.asarray(w, dtype=float)
+    N = float(w @ fc["ppq"])
+    if N <= 0:
+        raise ValueError("empty training fold")
+    hum = float(w @ fc["hr"]) / N
+    jr = (rc["lr"] @ w) / N                                   # [T]
+    gap = np.abs(jr - hum)[rc["pref"]]
+    j = int(rc["pref"][np.flatnonzero(gap <= gap.min() + EPS)[0]])
+    return j, {"t": int(rc["ts"][j]), "score_threshold": float(rc["ts"][j])
+               / rc["K"], "train_pairs": N, "train_human_rate": hum,
+               "train_judge_rate": float(jr[j]),
+               "train_judge_rate_at_RAW_t": float(jr[rc["t_raw"] - 1])}
+
+
+def rethresh_labels(cl: dict, seed: int = SEED) -> tuple[dict, dict]:
+    """Cross-fitted RETHRESH (rate matching, the add-on's definition) and
+    RETHRESH_K (B6 followup2's train-kappa objective, b6.rt_crossfit
+    verbatim) on the B6 query-disjoint folds (fold_of(ds, qid, 42), the
+    REFIT folds).  Labels are binary {0, 2} (D2 only reads >= 2)."""
+    cell = cl["cell"]
+    fc = b6.followup_cache(cell, seed)
+    rc = b6.rethresh_cache(fc, cell)
+    if not np.array_equal(fc["labs"][b6.RAW_C], cl["labels"]["RAW"]):
+        sys.exit(f"ERROR: '{cl['model']}' @ {cl['dataset']}: followup_cache "
+                 f"RAW labels differ from the d2-pool RAW labels.")
+    qfold = fc["qfold"]
+    pair_fold = qfold[cell["pair_q"]]
+    pf_cf = np.array([b6.fold_of(cl["dataset"], q, seed)
+                      for q in cell["pair_qid"]], dtype=np.int64)
+    if not np.array_equal(pair_fold, pf_cf):
+        sys.exit(f"ERROR: '{cl['model']}' @ {cl['dataset']}: RETHRESH folds "
+                 f"differ from b6.crossfit's (REFIT) folds.")
+    if (pair_fold == 0).sum() == 0 or (pair_fold == 1).sum() == 0:
+        raise ValueError("query-hash split left one fold empty")
+    h = np.asarray(cell["h"])
+    labs = {a: np.zeros(len(h), dtype=np.int64) for a in RT_ADDON_ARMS}
+    folds = {a: [] for a in RT_ADDON_ARMS}
+    tsel, okk, _sm = b6.rt_crossfit(rc, fc, qfold, np.ones((1, fc["nq"])),
+                                    "kappa")
+    if not okk[0]:
+        raise ValueError("RETHRESH_K cross-fit failed")
+    for k in (0, 1):
+        tr = (qfold != k).astype(float)
+        te = pair_fold == k
+        j, info = rate_pick(rc, fc, tr)
+        jk = int(tsel[0, k])
+        for a, jj in (("RETHRESH", j), ("RETHRESH_K", jk)):
+            labs[a][te] = np.where(rc["yp"][jj, te], 2, 0)
+            d = dict(info) if a == "RETHRESH" else {
+                "t": int(rc["ts"][jj]),
+                "score_threshold": float(rc["ts"][jj]) / rc["K"]}
+            d.update({"test_fold": k, "n_test_pairs": int(te.sum()),
+                      "test_human_rate": float((h[te] >= REL).mean()),
+                      "test_judge_rate": float((labs[a][te] >= REL).mean()),
+                      "test_judge_rate_RAW": float(
+                          (cl["labels"]["RAW"][te] >= REL).mean())})
+            folds[a].append(d)
+    return labs, {"K_records_mode": rc["K"], "t_raw": rc["t_raw"],
+                  "t_raw_exact": rc["t_raw_exact"], "folds": folds}
+
+
+def d2_setup(cl: dict, B: int, seed: int) -> dict:
+    """qcode / nq / nH / bootstrap weights exactly as d2_cell builds them."""
+    qn = sorted(set(cl["qid"]))
+    qmap = {q: i for i, q in enumerate(qn)}
+    qcode = np.array([qmap[q] for q in cl["qid"]], dtype=np.int64)
+    nq = len(qn)
+    h = np.asarray(cl["human"], dtype=np.int64)
+    nH = np.bincount(qcode, weights=(h >= REL).astype(float), minlength=nq)
+    W = boot_weights_from_idx(b6.boot_indices(nq, B, seed), nq)
+    return {"qcode": qcode, "nq": nq, "h": h, "nH": nH, "W": W}
+
+
+def trivial_d2_indicators(nH: np.ndarray, grid) -> dict:
+    """(decision, grid) -> {ALWAYS_YES / ALWAYS_NO: per-query 0/1 error}
+    (verdict-level rules; D2c has no trivial counterpart)."""
+    out = {}
+    for K in grid:
+        key = ("D2a", "K=1") if K == 1 else ("D2b", f"K={K}")
+        vh = nH >= K
+        out[key] = {"ALWAYS_YES": (~vh).astype(float),
+                    "ALWAYS_NO": vh.astype(float)}
+    return out
+
+
+def crosscheck_d2(old_json: dict | None, ds: str, model: str,
+                  pts: dict) -> str:
+    """Recomputed RAW / FROZEN points vs the stored de_d2-pool.json."""
+    if not old_json:
+        return "not cross-checked (de_d2-pool.json absent)"
+    cells = [c for c in old_json.get("datasets", {}).get(ds, [])
+             if c.get("model") == model and "point" in c]
+    if not cells:
+        return f"not cross-checked (no {ds} cell for {model} in de_d2-pool.json)"
+    for key, p in pts.items():
+        k = f"{key[0]}|{key[1]}"
+        for a in ("RAW", "FROZEN"):
+            want = cells[0]["point"].get(k, {}).get(a)
+            if want is None or abs(float(want) - p[a]) > CROSS_TOL:
+                sys.exit(f"ERROR: {model} @ {ds} {k} {a}: recomputed "
+                         f"{p[a]!r} != de_d2-pool.json {want!r}.")
+    return "identical to de_d2-pool.json (RAW, FROZEN; every decision)"
+
+
+def addon_d2(cells: dict, datasets, parts, B: int, seed: int,
+             old_d2: dict | None) -> tuple[list, dict, dict]:
+    rows, js_rt, js_tr = [], {}, {}
+    for ds in datasets:
+        js_rt[ds], js_tr[ds] = [], []
+        tag = {"dl22": "PRIMARY (held-out)", "dl21": "report only",
+               "antique": "report only"}[ds]
+        print(f"\n  [{ds}] {tag}  K grid {K_GRID[ds]}  B={B} seed={seed}")
+        for cl in cells[ds]:
+            if "error" in cl:
+                print(f"    {cl['model']}: SKIPPED ({cl['error']})")
+                js_rt[ds].append({"model": cl["model"], "error": cl["error"]})
+                continue
+            st = d2_setup(cl, B, seed)
+            base = d2_cell(cl, B, seed)                # registered code path
+            chk = crosscheck_d2(old_d2, ds, cl["model"], base["pts"])
+            nq, W = st["nq"], st["W"]
+            zero = int((st["nH"] == 0).sum())
+            print(f"    {cl['model']:<32} queries {nq:>3}  zero-human-"
+                  f"relevant queries {zero} ({zero / nq:.3f})"
+                  f"{'  [flagship 40%]' if cl['flagship'] else ''}  {chk}")
+            if "rethresh" in parts:
+                try:
+                    labs, info = rethresh_labels(cl, seed)
+                except ValueError as e:
+                    print(f"      RETHRESH: SKIPPED ({e})")
+                    js_rt[ds].append({"model": cl["model"], "error": str(e)})
+                    labs = None
+                if labs is not None:
+                    ind = d2_indicators(st["qcode"], nq, st["h"], labs,
+                                        K_GRID[ds])
+                    pts, reps, dfz = {}, {}, {}
+                    for key, e in ind.items():
+                        pts[key] = {"RAW": base["pts"][key]["RAW"],
+                                    "FROZEN": base["pts"][key]["FROZEN"],
+                                    **{a: float(v.mean())
+                                       for a, v in e.items()}}
+                        reps[key] = {"RAW": base["reps"][key]["RAW"],
+                                     "FROZEN": base["reps"][key]["FROZEN"],
+                                     **{a: W @ v / nq for a, v in e.items()}}
+                        rows += make_rows(key[0], ds, cl["model"], key[1],
+                                          pts[key], reps[key],
+                                          ("RAW",) + RT_ADDON_ARMS)[1:]
+                        dfz[f"{key[0]}|{key[1]}"] = {
+                            a: {"point": pts[key][a] - pts[key]["FROZEN"],
+                                "ci90": ci90(reps[key][a]
+                                             - reps[key]["FROZEN"])}
+                            for a in RT_ADDON_ARMS}
+                    for a in RT_ADDON_ARMS:
+                        print(f"      {a:<10} t per test fold: " + ", ".join(
+                            f"f{f['test_fold']} t={f['t']} (mean>="
+                            f"{f['score_threshold']:.3f})"
+                            + (f" train rate {f['train_judge_rate']:.3f} vs "
+                               f"human {f['train_human_rate']:.3f} [RAW t "
+                               f"{f['train_judge_rate_at_RAW_t']:.3f}]"
+                               if a == "RETHRESH" else "")
+                            for f in info["folds"][a]))
+                    print("      " + "  ".join(
+                        f"{k[0]} {k[1]}: RAW {p['RAW']:.3f} FROZEN "
+                        f"{p['FROZEN']:.3f} RETHRESH {p['RETHRESH']:.3f}"
+                        f" (_K {p['RETHRESH_K']:.3f})"
+                        for k, p in pts.items()))
+                    js_rt[ds].append({
+                        "model": cl["model"], "n_pairs": len(st["h"]),
+                        "n_queries": nq, "flagship": cl["flagship"],
+                        "noop": cl["noop"], "check": cl["check"],
+                        "crosscheck_d2_pool": chk, "rethresh": info,
+                        "point": {f"{k[0]}|{k[1]}": v for k, v in
+                                  pts.items()},
+                        "ci90": {f"{k[0]}|{k[1]}": {a: ci90(x) for a, x in
+                                                    v.items()}
+                                 for k, v in reps.items()},
+                        "d_vs_FROZEN": dfz})
+            if "trivial" in parts:
+                ind = trivial_d2_indicators(st["nH"], K_GRID[ds])
+                pts, reps = {}, {}
+                for key, e in ind.items():
+                    pts[key] = {"RAW": base["pts"][key]["RAW"],
+                                **{a: float(v.mean()) for a, v in e.items()}}
+                    reps[key] = {"RAW": base["reps"][key]["RAW"],
+                                 **{a: W @ v / nq for a, v in e.items()}}
+                    rows += make_rows(key[0], ds, cl["model"], key[1],
+                                      pts[key], reps[key],
+                                      ("RAW",) + D2_TRIVIAL_ARMS)[1:]
+                js_tr[ds].append({
+                    "model": cl["model"], "n_queries": nq,
+                    "flagship": cl["flagship"],
+                    "queries_with_0_human_rel": zero,
+                    "share_queries_0_human_rel": zero / nq,
+                    "point": {f"{k[0]}|{k[1]}": v for k, v in pts.items()},
+                    "ci90": {f"{k[0]}|{k[1]}": {a: ci90(x) for a, x in
+                                                v.items()}
+                             for k, v in reps.items()}})
+    return rows, js_rt, js_tr
+
+
+def rethresh_tally(js_rt: dict) -> dict:
+    """|RETHRESH - FROZEN| <= TIE count per dataset (the add-on's stated
+    expectation 'RETHRESH and FROZEN differ by <= 0.02 in most cells')."""
+    out = {}
+    for ds, cells in js_rt.items():
+        n = within = 0
+        for c in cells:
+            for v in c.get("d_vs_FROZEN", {}).values():
+                n += 1
+                within += int(abs(v["RETHRESH"]["point"]) <= TIE + EPS)
+        out[ds] = {"cells": n, "within_0.02": within}
+    return out
+
+
+# ── 2/3. D3 trivial baselines, cluster bootstrap, label classes ───────────
+
+def cfg_codes(units: list[dict]) -> tuple[np.ndarray, list[str]]:
+    """Configuration = (arm, teacher slug, training set); seeds share it."""
+    names = sorted({f"{u['arm']}|{u['slug']}|{u['set']}" for u in units})
+    idx = {n: i for i, n in enumerate(names)}
+    return np.array([idx[f"{u['arm']}|{u['slug']}|{u['set']}"]
+                     for u in units], dtype=np.int64), names
+
+
+def cluster_weights(cfg: np.ndarray, B: int, seed: int) -> np.ndarray:
+    """(B, n_students) weights: the configurations are resampled with
+    replacement (rng seed ``seed``), every student inherits its
+    configuration's multiplicity (the seeds of a configuration move
+    together).  Paired row-by-row with the query bootstrap replicates."""
+    codes, inv = np.unique(cfg, return_inverse=True)
+    nC = len(codes)
+    rng = np.random.default_rng(seed)
+    Mc = np.stack([np.bincount(rng.integers(0, nC, size=nC), minlength=nC)
+                   for _ in range(B)]).astype(float)
+    return Mc[:, inv]
+
+
+def weighted_err(mis_bt: np.ndarray, Wc: np.ndarray) -> np.ndarray:
+    """mis_bt (B, n) 0/1; Wc (B, n) -> (B,) weighted error rates."""
+    den = Wc.sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(den > 0, (Wc * mis_bt).sum(axis=1) / den, np.nan)
+
+
+def d3_cluster_errors(ss: dict, mask: np.ndarray, B: int,
+                      seed: int) -> tuple[dict, dict, int]:
+    """Point (unweighted over students) and joint configuration x query
+    replicates for RAW / FROZEN / SHIFT_FROZEN / ALWAYS_FAIL / ALWAYS_PASS
+    on the students in ``mask``."""
+    cfg, _names = cfg_codes(ss["units"])
+    cfg = cfg[mask]
+    Wc = cluster_weights(cfg, B, seed)
+    pH, bH = ss["pass_pt"]["HUMAN"][mask], ss["pass_bt"]["HUMAN"][:, mask]
+    if bH.shape[0] != B:
+        sys.exit(f"ERROR: query bootstrap has {bH.shape[0]} replicates, "
+                 f"cluster draw {B}.")
+    pts, reps = {}, {}
+    for T in D3_ARMS:
+        pts[T] = float((ss["pass_pt"][T][mask] != pH).mean())
+        reps[T] = weighted_err((ss["pass_bt"][T][:, mask] != bH)
+                               .astype(float), Wc)
+    pts["ALWAYS_FAIL"] = float(pH.mean())
+    reps["ALWAYS_FAIL"] = weighted_err(bH.astype(float), Wc)
+    pts["ALWAYS_PASS"] = 1.0 - pts["ALWAYS_FAIL"]
+    reps["ALWAYS_PASS"] = 1.0 - reps["ALWAYS_FAIL"]
+    return pts, reps, len(np.unique(cfg))
+
+
+def d3_trivial(ss: dict) -> tuple[dict, dict]:
+    """Query-bootstrap (d3-validate's CI) trivial rows per student-arm grid."""
+    pts0, reps0, _pr = d3_errors(ss)
+    out_p, out_r = {}, {}
+    grids = {"all": np.ones(len(ss["units"]), dtype=bool)}
+    for a in STUDENT_ARMS:
+        m = np.array([u["arm"] == a for u in ss["units"]])
+        if m.any():
+            grids[a] = m
+    for g, m in grids.items():
+        pH = ss["pass_pt"]["HUMAN"][m]
+        bH = ss["pass_bt"]["HUMAN"][:, m]
+        out_p[g] = {"RAW": pts0[("D3", g)]["RAW"],
+                    "ALWAYS_FAIL": float(pH.mean()),
+                    "ALWAYS_PASS": float(1.0 - pH.mean())}
+        out_r[g] = {"RAW": reps0[("D3", g)]["RAW"],
+                    "ALWAYS_FAIL": bH.mean(axis=1),
+                    "ALWAYS_PASS": 1.0 - bH.mean(axis=1)}
+    return out_p, out_r
+
+
+def train_label_means(units: list[dict], data_dir: Path | None) -> dict:
+    """(slug, set) -> training-label mean (eval JSON 'train_label_mean',
+    averaged over arms / seeds; fallback manifest summary mean)."""
+    acc = defaultdict(list)
+    for u in units:
+        v = u.get("result", {}).get("train_label_mean")
+        if v is not None:
+            acc[(u["slug"], u["set"])].append(float(v))
+    out = {k: (float(np.mean(v)), "eval") for k, v in acc.items()}
+    if data_dir is not None:
+        for slug in sorted({u["slug"] for u in units}):
+            mf = _load_json(data_dir / "derived" / "batch7" / slug /
+                            "manifest.json")
+            if not mf:
+                continue
+            for s in {u["set"] for u in units if u["slug"] == slug}:
+                if (slug, s) in out:
+                    continue
+                ent = (mf.get("summary", {}).get(s)
+                       or mf.get("ablation_sets", {}).get(s) or {})
+                if ent.get("mean") is not None:
+                    out[(slug, s)] = (float(ent["mean"]), "manifest")
+    return out
+
+
+def classify_sets(tlm: dict, sets) -> dict:
+    """Per training set: pooled offsets vs HUMAN and RAW, r, data class,
+    spec class (see CLASS_RULE)."""
+    spec_of = {s: c for c, ss in SPEC_CLASSES.items() for s in ss}
+    out = {}
+    for s in sorted(sets):
+        per = {}
+        for (slug, s2), (m, src) in tlm.items():
+            if s2 != s or (slug, "HUMAN") not in tlm \
+                    or (slug, "RAW") not in tlm:
+                continue
+            mh, mr = tlm[(slug, "HUMAN")][0], tlm[(slug, "RAW")][0]
+            per[slug] = {"mean": m, "source": src, "off": m - mh,
+                         "raw_off": mr - mh}
+        r = off = raw_off = None
+        cls = None
+        if per:
+            off = float(np.mean([v["off"] for v in per.values()]))
+            raw_off = float(np.mean([v["raw_off"] for v in per.values()]))
+            if abs(raw_off) > EPS:
+                r = off / raw_off
+                cls = ("raw-scale" if r >= CLASS_HI - EPS else
+                       "human-scale" if r <= CLASS_LO + EPS else
+                       "intermediate")
+        sc = spec_of.get(s)
+        out[s] = {"per_teacher": per, "off_vs_human": off,
+                  "raw_off_vs_human": raw_off, "r": r, "data_class": cls,
+                  "spec_class": sc,
+                  "agrees": (cls is not None and sc is not None
+                             and DATA_CLASS_OF_SPEC[sc] == cls)}
+    return out
+
+
+def addon_d3(studies: list, parts, B: int, seed: int, data_dir: Path,
+             old_d3: dict | None) -> tuple[list, dict, dict]:
+    rows, js_cl, js_tr = [], {"evaluators": []}, {"evaluators": []}
+    classes = None
+    if "d3cluster" in parts and studies:
+        allu = {f"{u['arm']}|{u['slug']}|{u['set']}|{u['seed']}": u
+                for ss in studies for u in ss["units"]}
+        tlm = train_label_means(list(allu.values()), data_dir)
+        classes = classify_sets(tlm, {u["set"] for u in allu.values()})
+        print(f"\n  LABEL-CLASS RULE (printed and fixed before any class-level "
+              f"error is computed):\n    {CLASS_RULE}")
+        print(f"    {'set':<18} {'off vs H':>9} {'RAW off':>8} {'r':>7}  "
+              f"{'data class':<13} {'spec class':<18} agree  per-teacher "
+              f"means (source)")
+        for s, c in classes.items():
+            print(f"    {s:<18} {_f(c['off_vs_human'])} {_f(c['raw_off_vs_human'])}"
+                  f" {_f(c['r'], 3)}  {str(c['data_class']):<13} "
+                  f"{str(c['spec_class']):<18} {'yes' if c['agrees'] else 'NO':<5}  "
+                  + ", ".join(f"{sl.split('__')[-1]} {v['mean']:.3f}"
+                              f"({v['source']})"
+                              for sl, v in sorted(c["per_teacher"].items())))
+        dis = [s for s, c in classes.items() if not c["agrees"]]
+        if dis:
+            print(f"    data-driven rule DISAGREES with the spec grouping on "
+                  f"{dis}: D3grp:<class> rows use the DATA-DRIVEN classes; "
+                  f"the spec grouping is reported as D3grpspec:<class>.")
+        else:
+            print("    data-driven rule agrees with the spec grouping on "
+                  "every set.")
+        js_cl["class_rule"] = CLASS_RULE
+        js_cl["classes"] = classes
+        js_cl["disagreements"] = dis
+    for ss in studies:
+        ev = ss["evaluator"]
+        prim = ev == EVALUATORS[0]
+        n = len(ss["units"])
+        if "trivial" in parts:
+            tp, tr = d3_trivial(ss)
+            for g in tp:
+                rows += make_rows("D3", "dl22", ev, g, tp[g], tr[g],
+                                  ("RAW",) + D3_TRIVIAL_ARMS)[1:]
+            print(f"\n  D3 trivial ({ev}{', PRIMARY' if prim else ''}; "
+                  f"{n} students): " + "  ".join(
+                      f"[{g}] RAW {p['RAW']:.3f} ALWAYS_FAIL "
+                      f"{p['ALWAYS_FAIL']:.3f} ALWAYS_PASS "
+                      f"{p['ALWAYS_PASS']:.3f}" for g, p in tp.items()))
+            js_tr["evaluators"].append({
+                "evaluator": ev, "n_students": n,
+                "point": tp, "ci90": {g: {a: ci90(x) for a, x in r.items()}
+                                      for g, r in tr.items()}})
+        if "d3cluster" not in parts:
+            continue
+        allm = np.ones(n, dtype=bool)
+        pts, reps, nC = d3_cluster_errors(ss, allm, B, seed)
+        chk = "not cross-checked (de_d3-validate.json absent)"
+        if old_d3:
+            o = next((e for e in old_d3.get("evaluators", [])
+                      if e.get("evaluator") == ev), None)
+            if o is not None:
+                for T in D3_ARMS:
+                    want = o["point"]["D3|all"][T]
+                    if abs(float(want) - pts[T]) > CROSS_TOL:
+                        sys.exit(f"ERROR: {ev} D3 {T}: recomputed {pts[T]!r} "
+                                 f"!= de_d3-validate.json {want!r}.")
+                chk = "points identical to de_d3-validate.json"
+        rows += make_rows("D3cl", "dl22", ev, "all", pts, reps,
+                          D3_ARMS + D3_TRIVIAL_ARMS)
+        qci = (o["ci90"]["D3|all"] if old_d3 and o is not None else None)
+        print(f"\n  D3 cluster bootstrap — {ev}{'  [PRIMARY]' if prim else ''}"
+              f": {n} students in {nC} configurations (arm x teacher x set), "
+              f"{ss['n_queries']} queries; {chk}")
+        for T in D3_ARMS + D3_TRIVIAL_ARMS:
+            lo, hi = ci90(reps[T])
+            extra = ""
+            if T != "RAW" and T in D3_ARMS:
+                dl, dh = ci90(reps[T] - reps["RAW"])
+                extra = (f"  Δ vs RAW {pts[T] - pts['RAW']:+.3f} "
+                         f"[{dl:+.3f},{dh:+.3f}] "
+                         f"{'excl. 0' if dl * dh > 0 else 'incl. 0'}")
+            q = (f"  (query-only CI [{qci[T][0]:.3f},{qci[T][1]:.3f}])"
+                 if qci and T in qci and qci[T][0] is not None else "")
+            print(f"    {T:<13} err {pts[T]:.3f}  cluster 90% CI "
+                  f"[{lo:.3f},{hi:.3f}]{q}{extra}")
+        ej = {"evaluator": ev, "primary": prim, "n_students": n,
+              "n_configs": nC, "crosscheck_d3": chk,
+              "point": pts, "ci90": {a: ci90(x) for a, x in reps.items()},
+              "d_vs_RAW": {T: {"point": pts[T] - pts["RAW"],
+                               "ci90": ci90(reps[T] - reps["RAW"])}
+                           for T in D3_ARMS[1:]},
+              "query_only_ci90": qci, "groups": {}}
+        set_of = np.array([u["set"] for u in ss["units"]])
+        for prefix, key in (("D3grp", "data_class"),
+                            ("D3grpspec", "spec_class")):
+            labs = np.array([str(classes.get(s, {}).get(key)) for s in set_of])
+            for c in sorted(set(labs)):
+                m = labs == c
+                gp, gr, gC = d3_cluster_errors(ss, m, B, seed)
+                rows += make_rows(f"{prefix}:{c}", "dl22", ev, "all", gp, gr,
+                                  D3_ARMS)
+                pr = {T: float(ss["pass_pt"][T][m].mean())
+                      for T in D3_TEST_SETS}
+                ej["groups"][f"{prefix}:{c}"] = {
+                    "n_students": int(m.sum()), "n_configs": gC,
+                    "sets": sorted(set(set_of[m].tolist())),
+                    "pass_rate": pr, "point": gp,
+                    "ci90": {a: ci90(x) for a, x in gr.items()}}
+                print(f"    {prefix + ':' + c:<32} n={int(m.sum()):>3} "
+                      f"cfg={gC:>2}  pass " + " ".join(
+                          f"{T} {pr[T]:.2f}" for T in D3_TEST_SETS)
+                      + "  err " + " ".join(f"{T} {gp[T]:.3f}"
+                                            for T in D3_ARMS))
+        js_cl["evaluators"].append(ej)
+    return rows, js_cl, js_tr
+
+
+# ── 4. D1a constant-offset curve ──────────────────────────────────────────
+
+def offset_curve(H, deltas) -> np.ndarray:
+    """D1a error of predicting 'H(s) + δ > H(r)' against truth 'H(s) > H(r)'
+    over ordered pairs s != r, for every δ."""
+    H = np.asarray(H, dtype=float)
+    D = H[:, None] - H[None, :]
+    off = ~np.eye(len(H), dtype=bool)
+    truth = (D > 0)[off]
+    Do = D[off]
+    return np.array([float(((Do + d > 0) != truth).mean())
+                     for d in np.atleast_1d(deltas)])
+
+
+def two_cluster(H) -> dict:
+    """Largest-gap split into two clusters and the plateau formula
+    0.5 x (share of within-cluster ordered pairs), valid for
+    max within-cluster spread < |δ| < gap."""
+    s = np.sort(np.asarray(H, dtype=float))
+    n = len(s)
+    if n < 3:
+        return {}
+    g = np.diff(s)
+    i = int(np.argmax(g))
+    n1, n2 = i + 1, n - i - 1
+    return {"sizes": [n1, n2], "gap": float(g[i]),
+            "boundary": [float(s[i]), float(s[i + 1])],
+            "max_within_spread": float(max(s[i] - s[0], s[-1] - s[i + 1])),
+            "plateau_regime_exists": bool(max(s[i] - s[0], s[-1] - s[i + 1])
+                                          < g[i]),
+            "plateau_formula": 0.5 * (n1 * (n1 - 1) + n2 * (n2 - 1))
+            / (n * (n - 1))}
+
+
+def curve_entry(cid: str, ds: str, label: str, H, observed: list,
+                extra: dict) -> dict:
+    H = np.asarray(H, dtype=float)
+    err = offset_curve(H, CURVE_DELTAS)
+    for o in observed:
+        o["curve_at_offset"] = float(offset_curve(H, [o["mean_offset"]])[0])
+        o["residual"] = o["err"] - o["curve_at_offset"] \
+            if o["err"] is not None else None
+    return {"id": cid, "dataset": ds, "label": label, "n_systems": len(H),
+            "human_ndcg": H, "human_band": [float(H.min()), float(H.max())],
+            "err": err, "two_cluster": two_cluster(H),
+            "observed": observed, **extra}
+
+
+def observed_points(js: dict | None, key: str) -> dict:
+    """judge/evaluator -> [{arm, mean_offset, err}] from a de_d1-*.json."""
+    out = {}
+    if not js:
+        return out
+    for e in js.get("judges" if key == "model" else "evaluators", []):
+        offs = e.get("mean_offset_vs_human", {})
+        d1a = e.get("point", {}).get("D1a|-", {})
+        out[e[key]] = [{"judge": e[key], "arm": a, "mean_offset": float(o),
+                        "err": (float(d1a[a]) if d1a.get(a) is not None
+                                else None)}
+                       for a, o in offs.items() if o is not None]
+    return out
+
+
+def pool_human_vector(b5rows: list[dict]) -> tuple[list[str], np.ndarray,
+                                                   str]:
+    by = defaultdict(dict)
+    for r in b5rows:
+        by[r["judge"]][r["system"]] = r["HUMAN"]
+    judges = list(by)
+    systems = sorted(by[judges[0]])
+    same = all(by[j] == by[judges[0]] for j in judges)
+    note = ("HUMAN column identical for every judge" if same else
+            f"WARNING: HUMAN column differs across judges; using "
+            f"{judges[0]}'s")
+    return systems, np.array([float(by[judges[0]][s]) for s in systems]), note
+
+
+def addon_d1curve(b5p: Path, studies: list, od: Path,
+                  shas_extra: dict) -> tuple[list, dict]:
+    rows, curves = [], []
+    jb5 = _load_json(od / "de_d1-b5.json")
+    jst = _load_json(od / "de_d1-students.json")
+    for nm, p in (("de_d1-b5.json", od / "de_d1-b5.json"),
+                  ("de_d1-students.json", od / "de_d1-students.json")):
+        shas_extra.setdefault("observed_inputs_sha256", {})[nm] = \
+            b6.sha256_file(p) if p.exists() else None
+        if not p.exists():
+            print(f"  NOTE: {p} absent — no observed points from it.")
+    systems, Hp, note = pool_human_vector(read_b5_csv(b5p))
+    obs_b5 = observed_points(jb5, "model")
+    obs = [o for v in obs_b5.values() for o in v]
+    curves.append(curve_entry("pool", B5_DATASET,
+                              f"B5 pool ({len(Hp)} systems, {B5_DATASET})",
+                              Hp, obs, {"systems": systems,
+                                        "source": "b5_per_system_ndcg.csv "
+                                        "HUMAN column (4 dp)", "note": note}))
+    obs_st = observed_points(jst, "evaluator")
+    for ss in studies:
+        ev = ss["evaluator"]
+        eng = D1Engine(ss["V"], ss["M"], sig=False)
+        H = eng.means(np.ones(ss["n_queries"]))[0]
+        o = next((e for e in (jst or {}).get("evaluators", [])
+                  if e.get("evaluator") == ev), None)
+        if o is not None:
+            band = o.get("human_ndcg_band")
+            if band and (abs(band[0] - H.min()) > 1e-9
+                         or abs(band[1] - H.max()) > 1e-9):
+                sys.exit(f"ERROR: {ev}: recomputed student HUMAN NDCG band "
+                         f"[{H.min()}, {H.max()}] != de_d1-students.json "
+                         f"{band}.")
+        curves.append(curve_entry(
+            f"zoo:{ev}", "dl22", f"student zoo ({len(H)} students, dl22; "
+            f"evaluator {short_judge(ev)})", H, obs_st.get(ev, []),
+            {"evaluator": ev, "primary": ev == EVALUATORS[0],
+             "students": [f"{u['arm']}/{u['slug']}/{u['set']}_s{u['seed']}"
+                          for u in ss["units"]],
+             "source": "d1-students code path (student_study V[HUMAN], "
+                       "D1Engine.means)"}))
+    for c in curves:
+        jlab = "B5-pool" if c["id"] == "pool" else c["evaluator"]
+        for d, e in zip(CURVE_DELTAS, c["err"]):
+            rows.append({"decision": "D1curve", "dataset": c["dataset"],
+                         "judge": jlab, "arm": "CONST_OFFSET",
+                         "grid": f"delta={d:+.3f}", "err": float(e),
+                         "ci_lo": None, "ci_hi": None, "d_vs_RAW": None,
+                         "d_ci": "", "verdict": "descr"})
+        for o in c["observed"]:
+            if o["err"] is None:
+                continue
+            rows.append({"decision": "D1curve_obs", "dataset": c["dataset"],
+                         "judge": o["judge"], "arm": o["arm"],
+                         "grid": f"offset={o['mean_offset']:+.4f}",
+                         "err": o["err"], "ci_lo": None, "ci_hi": None,
+                         "d_vs_RAW": None, "d_ci": "",
+                         "verdict": f"descr(curve={o['curve_at_offset']:.4f})"})
+        tc = c["two_cluster"]
+        print(f"\n  D1a constant-offset curve — {c['label']}: HUMAN band "
+              f"[{c['human_band'][0]:.4f}, {c['human_band'][1]:.4f}]")
+        if tc:
+            print(f"    largest-gap 2-cluster split: sizes {tc['sizes']}, gap "
+                  f"{tc['gap']:.4f}, max within-cluster spread "
+                  f"{tc['max_within_spread']:.4f} -> plateau formula "
+                  f"0.5 x within-pair share = {tc['plateau_formula']:.4f} "
+                  + (f"(valid for {tc['max_within_spread']:.3f} < |δ| < "
+                     f"{tc['gap']:.3f})" if tc["plateau_regime_exists"] else
+                     "(NO plateau regime: within-cluster spread >= gap)"))
+        sel = [-0.15, -0.06, -0.03, -0.01, 0.0, 0.005, 0.01, 0.02, 0.03,
+               0.04, 0.06, 0.12, 0.15]
+        print("    curve: " + "  ".join(
+            f"δ={d:+.3f}:{e:.3f}" for d, e in zip(CURVE_DELTAS, c["err"])
+            if any(abs(d - x) < 1e-9 for x in sel)))
+        for o in c["observed"]:
+            print(f"    observed {short_judge(o['judge']):<18} {o['arm']:<13} "
+                  f"mean offset {o['mean_offset']:+.4f}  D1a "
+                  f"{_f(o['err'], sign=False)}  curve "
+                  f"{o['curve_at_offset']:.4f}  residual "
+                  f"{_f(o['residual'])}")
+    return rows, {"delta_grid": CURVE_DELTAS, "curves": curves}
+
+
+# ── 5. meta ───────────────────────────────────────────────────────────────
+
+def collect_meta(od: Path) -> list[dict]:
+    out = []
+    for p in sorted(od.glob("de_*.json")):
+        try:
+            m = json.loads(p.read_text(encoding="utf-8")).get("meta", {}) or {}
+        except (json.JSONDecodeError, AttributeError) as e:
+            out.append({"file": p.name, "error": f"unreadable: {e}"})
+            continue
+        out.append({"file": p.name, "script": m.get("script"),
+                    "registration_commit": m.get("registration_commit"),
+                    "addons_registration_commit":
+                        m.get("addons_registration_commit"),
+                    "git_hash": m.get("git_hash"),
+                    "code_dirty": m.get("code_dirty"),
+                    "timestamp_utc": m.get("timestamp_utc"),
+                    "sha256": b6.sha256_file(p)})
+    return out
+
+
+def meta_lines(meta: list[dict]) -> list[str]:
+    L = ["# DE snapshot metadata (scripts/decision_errors.py addons --parts "
+         "meta)", f"# generated {now_utc()}",
+         "file\tscript\tregistration_commit\taddons_registration_commit\t"
+         "git_hash\tcode_dirty\ttimestamp_utc\tsha256"]
+    for m in meta:
+        if "error" in m:
+            L.append(f"{m['file']}\t{m['error']}")
+            continue
+        L.append("\t".join(str(m[k]) for k in (
+            "file", "script", "registration_commit",
+            "addons_registration_commit", "git_hash", "code_dirty",
+            "timestamp_utc", "sha256")))
+    return L
+
+
+# ── driver ────────────────────────────────────────────────────────────────
+
+def parse_parts(spec: str) -> list[str]:
+    parts = [p.strip() for p in spec.split(",") if p.strip()]
+    bad = [p for p in parts if p not in ADDON_PARTS]
+    if bad or not parts:
+        sys.exit(f"ERROR: --parts must be a subset of {list(ADDON_PARTS)}; "
+                 f"got {bad or parts}.")
+    return [p for p in ADDON_PARTS if p in parts]          # canonical order
+
+
+def cmd_addons(args) -> None:
+    parts = parse_parts(args.parts)
+    d2parts = [p for p in parts if p in ("rethresh", "trivial")]
+    datasets = parse_datasets(args.datasets) if d2parts else []
+    bad = [d for d in datasets if d not in D2_DATASETS]
+    if bad:
+        sys.exit(f"ERROR: D2 add-ons are defined on {list(D2_DATASETS)}; "
+                 f"got {bad}.")
+    students = any(p in parts for p in ("trivial", "d3cluster", "d1curve"))
+    reg = addons_gate(students or "dl22" in datasets, args.unseal_dl22,
+                      predictions_path(args.predictions))     # BEFORE data
+    data_dir = b5.resolve_data_dir(args.data_dir)
+    shas = {}
+    if datasets or students:
+        _r, _p, rsha = b6.load_rules(data_dir, args.rules)
+        shas["correction_rules.json"] = rsha
+    for ds in sorted(set(datasets) | ({"dl22"} if students else set())):
+        p = b6_labels_path(data_dir, ds)
+        if not p.exists():
+            sys.exit(f"ERROR: {p} not found.")
+        shas[p.name] = b6.sha256_file(p)
+    if students:
+        _d, eval_root = students_setup(args)
+        _u, _x, usha = scan_students(eval_root, load=False)
+        shas["b7_universe_dl22"] = usha
+    b5p = None
+    if "d1curve" in parts:
+        b5p = Path(args.b5_check) if args.b5_check else \
+            out_dir(data_dir) / "b5_per_system_ndcg.csv"
+        if not b5p.exists():
+            sys.exit(f"ERROR: B5 table {b5p} not found.")
+        shas["b5_per_system_ndcg.csv"] = b6.sha256_file(b5p)
+    if shas:
+        check_shas(reg, shas)
+    run_addons(args, parts, datasets, reg, shas, b5p)
+
+
+def run_addons(args, parts, datasets, reg, shas, b5p) -> dict:
+    data_dir = b5.resolve_data_dir(args.data_dir)
+    od = out_dir(data_dir)
+    print("=" * 100)
+    print(f"  DE ADD-ONS — {ADDON_NOTE}")
+    print(f"  parts={parts}  B={args.b} seed={args.seed}  add-on "
+          f"registration commit: {(reg or {}).get('addons_commit')}")
+    print("=" * 100)
+    rows, outs = [], {}
+    extra = {"B": args.b, "seed": args.seed, "status": ADDON_NOTE,
+             "addons_registration_commit": (reg or {}).get("addons_commit")}
+    if "rethresh" in parts or "trivial" in parts:
+        judges = b6._judges(args.judges)
+        cells, *_x = load_cells(args, datasets, judges,
+                                keep_cell="rethresh" in parts)
+        print("\n" + "-" * 100)
+        print("  D2 add-ons: RETHRESH = cross-fitted (B6 REFIT folds, fold "
+              "seed 42) one-parameter re-threshold of the L3 record mean, t "
+              "chosen on the train fold so that the judge relevant rate "
+              "matches the human one (ties -> RAW t, then lower t); "
+              "RETHRESH_K = B6 followup2's train-kappa objective (same grid "
+              "/ folds).  CIs are eval-only (fit not redone per replicate).  "
+              "ALWAYS_YES / ALWAYS_NO = verdict-level trivial rules.")
+        r2, js_rt, js_tr = addon_d2(cells, datasets, parts, args.b,
+                                    args.seed, _load_json(
+                                        od / "de_d2-pool.json"))
+        rows += r2
+        if "rethresh" in parts:
+            tally = rethresh_tally(js_rt)
+            print("\n  RETHRESH vs FROZEN (|Δ| <= 0.02, every judge x "
+                  "decision): " + "; ".join(
+                      f"{ds} {t['within_0.02']}/{t['cells']}"
+                      for ds, t in tally.items()))
+            outs["rethresh"] = {"datasets": js_rt, "tally_vs_FROZEN": tally,
+                                "rule": "rate matching on the train fold"}
+        if "trivial" in parts:
+            outs["trivial"] = {"d2": js_tr}
+    students = any(p in parts for p in ("trivial", "d3cluster", "d1curve"))
+    studies = []
+    if students:
+        print("\n" + "-" * 100)
+        _d, _units, excluded, usha, studies = load_student_studies(args)
+        extra["b7_universe_sha256"] = usha
+        extra["excluded_files"] = excluded
+    if "trivial" in parts or "d3cluster" in parts:
+        print("\n" + "-" * 100)
+        print(f"  D3 add-ons: trivial rules (query bootstrap, as d3-validate)"
+              f"; cluster bootstrap = the configurations (arm x teacher x "
+              f"training set; seeds move together) resampled with "
+              f"replacement JOINTLY with the queries, B={args.b}, seed "
+              f"{args.seed} (configurations: numpy default_rng({args.seed}); "
+              f"queries: batch7.boot_weights).")
+        r3, js_cl, js_t3 = addon_d3(studies, parts, args.b, args.seed,
+                                    data_dir,
+                                    _load_json(od / "de_d3-validate.json"))
+        rows += r3
+        if "trivial" in parts:
+            outs["trivial"]["d3"] = js_t3
+        if "d3cluster" in parts:
+            outs["d3cluster"] = js_cl
+    if "d1curve" in parts:
+        print("\n" + "-" * 100)
+        r4, js_c = addon_d1curve(b5p, studies, od, extra)
+        rows += r4
+        outs["d1curve"] = js_c
+    titles = {"rethresh": "D2 RETHRESH / RETHRESH_K", "trivial":
+              "trivial baselines", "d3cluster": "D3 cluster bootstrap and "
+              "label classes", "d1curve": "D1a constant-offset curve"}
+    for part, obj in outs.items():
+        pr = [r for r in rows if addon_part_of(r) == part]
+        if part != "d1curve":
+            print_rows(pr, f"ADD-ON rows — {titles[part]} (descriptive; "
+                           f"Δ vs RAW, tie band {TIE})")
+        write_json(od / f"de_addons_{part}.json",
+                   {"meta": base_meta(f"addons --parts {part}", reg, shas,
+                                      extra), **obj})
+    if rows:
+        write_addons_summary(data_dir, rows)
+    if "meta" in parts:
+        meta = collect_meta(od)
+        L = meta_lines(meta)
+        print("\n" + "-" * 100)
+        print("  SNAPSHOT METADATA (every de_*.json in " + str(od) + ")")
+        for ln in L[2:]:
+            print("    " + ln.replace("\t", "  "))
+        (od / "de_meta.txt").write_text("\n".join(L) + "\n", encoding="utf-8")
+        print(f"[txt] wrote {od / 'de_meta.txt'}")
+        write_json(od / "de_addons_meta.json",
+                   {"meta": base_meta("addons --parts meta", reg, shas, extra),
+                    "files": meta})
+        outs["meta"] = meta
+    return {"rows": rows, "outs": outs}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # fit-lodo-rules
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -2017,6 +2955,7 @@ def _st_students(root: Path, qrels: dict, seed: int = 5) -> list:
     pairs_u = sorted((q, d, g) for (ds, q, d), g in qrels.items()
                      if ds == "dl22")
     bias = {"HUMAN": 0.0, "RAW": 0.75, "CORR_FROZEN": 0.05, "MIX_200": 0.4}
+    gmean = float(np.mean([g for _q, _d, g in pairs_u]))
     made = []
     for arm in STUDENT_ARMS:
         for slug in ("stub__teach", "stub__eval"):
@@ -2026,7 +2965,8 @@ def _st_students(root: Path, qrels: dict, seed: int = 5) -> list:
                              for q, d, g in pairs_u]
                     res = b7.evaluate_pairs(pairs, b=50, seed=42)
                     out = {"universe_sha256": b7.universe_sha(pairs), **res,
-                           "pairs": pairs, "label_set": set_name}
+                           "pairs": pairs, "label_set": set_name,
+                           "train_label_mean": gmean + bb}
                     p = root / "derived" / "batch7" / "eval" / arm / slug / \
                         f"{set_name}_s{sd}_dl22.json"
                     p.parent.mkdir(parents=True, exist_ok=True)
@@ -2062,6 +3002,14 @@ def _ns(**kw) -> argparse.Namespace:
                 b5_judges=None, force=False, out=None)
     base.update(kw)
     return argparse.Namespace(**base)
+
+
+def _raises(fn, exc=ValueError) -> bool:
+    try:
+        fn()
+    except exc:
+        return True
+    return False
 
 
 def _exits(fn) -> bool:
@@ -2206,6 +3154,94 @@ def cmd_selftest(args) -> None:
           == ["HIT", "TIE", "MISS", "HIT", "HIT", "HIT", "MISS"])
     check("de_block stops at the next top-level heading",
           "# next" not in de_block(blk))
+
+    # ── 4b. add-on building blocks (synthetic) ──────────────────────────────
+    fc_u = {"ppq": np.array([10.0, 10, 10, 10]),
+            "hr": np.array([3.0, 2, 4, 1])}
+    rc_u = {"lr": np.array([[8.0, 8, 9, 7], [5, 4, 6, 3], [2, 1, 3, 0]]),
+            "ts": np.array([1, 2, 3]), "K": 1, "pref": np.array([1, 0, 2]),
+            "t_raw": 2}
+    j_u, inf_u = rate_pick(rc_u, fc_u, np.array([1.0, 1, 0, 0]))
+    check("RETHRESH rate matching: min |judge rate - human rate| on the "
+          "train fold", j_u == 2 and np.isclose(inf_u["train_human_rate"],
+                                                 0.25)
+          and np.isclose(inf_u["train_judge_rate"], 0.15)
+          and np.isclose(inf_u["train_judge_rate_at_RAW_t"], 0.45), str(inf_u))
+    fc_t = {"ppq": fc_u["ppq"], "hr": np.array([3.0, 3, 3, 3])}
+    j_t, _i = rate_pick(rc_u, fc_t, np.array([1.0, 1, 0, 0]))
+    check("RETHRESH rate matching: float tie (0.45 / 0.15 around 0.30) -> RAW "
+          "t first", j_t == 1, str(j_t))
+    check("RETHRESH rate matching: empty train fold raises",
+          _raises(lambda: rate_pick(rc_u, fc_u, np.zeros(4))))
+    nH_u = np.array([0.0, 1, 3, 5, 0])
+    ti = trivial_d2_indicators(nH_u, (1, 3))
+    check("trivial D2: ALWAYS_YES err = share nH < K, ALWAYS_NO = share "
+          "nH >= K",
+          ti[("D2a", "K=1")]["ALWAYS_YES"].mean() == 0.4
+          and ti[("D2a", "K=1")]["ALWAYS_NO"].mean() == 0.6
+          and ti[("D2b", "K=3")]["ALWAYS_YES"].mean() == 0.6
+          and ("D2c", f"tol={BUDGET_TOL}") not in ti)
+    cfg_u = np.repeat(np.arange(3), 3)
+    Wc = cluster_weights(cfg_u, 500, SEED)
+    check("cluster weights: (B, n_students), seeds of a configuration move "
+          "together, multiplicities sum to n_configs",
+          Wc.shape == (500, 9)
+          and all((Wc[:, 3 * c:3 * c + 3] == Wc[:, [3 * c]]).all()
+                  for c in range(3))
+          and np.allclose(Wc.sum(axis=1), 9.0)
+          and np.array_equal(Wc, cluster_weights(cfg_u, 500, SEED)))
+    mis_u = np.tile(np.array([1.0, 1, 1, 0, 0, 0, 0, 0, 0]), (500, 1))
+    re_u = weighted_err(mis_u, Wc)
+    lo_u, hi_u = ci90(re_u)
+    check("cluster bootstrap: configuration-only variance shows up (no query "
+          "variance), mean ~ 1/3",
+          re_u.shape == (500,) and hi_u - lo_u > 0.3
+          and abs(re_u.mean() - 1 / 3) < 0.05, f"[{lo_u:.3f},{hi_u:.3f}]")
+    Hc = np.concatenate([np.linspace(0.43, 0.47, 96),
+                         np.linspace(0.73, 0.77, 96)])
+    plat = 0.5 * 2 * 96 * 95 / (192 * 191)
+    cu = offset_curve(Hc, [0.0, 0.1, -0.1, 0.3, 0.001])
+    tc_u = two_cluster(Hc)
+    check("D1a curve: 0 at δ=0; plateau = 0.5 x within-cluster pair share "
+          "(two clusters of 96) for spread < |δ| < gap, symmetric",
+          cu[0] == 0.0 and np.isclose(cu[1], plat) and np.isclose(cu[2], plat)
+          and cu[3] > plat and 0 < cu[4] < plat
+          and np.isclose(tc_u["plateau_formula"], plat)
+          and tc_u["sizes"] == [96, 96], f"{cu.tolist()} vs {plat:.4f}")
+    Hb = np.array([0.30, 0.31, 0.32, 0.50])
+    check("D1a curve == brute force on a 4-system vector",
+          all(np.isclose(offset_curve(Hb, [d])[0], np.mean(
+              [(Hb[a] + d > Hb[b]) != (Hb[a] > Hb[b]) for a in range(4)
+               for b in range(4) if a != b]))
+              for d in (-0.2, -0.015, 0.005, 0.015, 0.05)))
+    with tempfile.TemporaryDirectory() as tmeta:
+        tm = Path(tmeta)
+        (tm / "de_x.json").write_text(json.dumps({"meta": {
+            "script": "s", "registration_commit": "abc,2026", "git_hash": "h",
+            "code_dirty": False, "timestamp_utc": "t"}}))
+        (tm / "de_bad.json").write_text("{not json")
+        mm = collect_meta(tm)
+        ml = meta_lines(mm)
+        check("meta parsing: fields of every de_*.json, unreadable file "
+              "flagged",
+              len(mm) == 2 and mm[1]["registration_commit"] == "abc,2026"
+              and mm[1]["code_dirty"] is False and "error" in mm[0]
+              and ml[2].startswith("file\tscript\tregistration_commit")
+              and ml[-1].startswith("de_x.json\ts\tabc,2026"), str(mm))
+    cls_u = classify_sets({("t", "HUMAN"): (1.0, "eval"),
+                           ("t", "RAW"): (1.6, "eval"),
+                           ("t", "MIX_200"): (1.3, "eval"),
+                           ("t", "CORR_FROZEN"): (0.9, "eval")},
+                          {"HUMAN", "RAW", "MIX_200", "CORR_FROZEN"})
+    check("label classes: r rule (raw / intermediate / human-scale) and "
+          "spec disagreement flagged",
+          cls_u["RAW"]["data_class"] == "raw-scale"
+          and cls_u["HUMAN"]["data_class"] == "human-scale"
+          and cls_u["MIX_200"]["data_class"] == "intermediate"
+          and not cls_u["MIX_200"]["agrees"]
+          and cls_u["CORR_FROZEN"]["data_class"] == "human-scale"
+          and cls_u["RAW"]["agrees"], str({k: v["data_class"]
+                                           for k, v in cls_u.items()}))
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(args.keep_dir) if args.keep_dir else Path(tmp)
@@ -2398,6 +3434,7 @@ def cmd_selftest(args) -> None:
                   sm.dataset == "dl21") & (sm.arm == "CORR")].d_vs_RAW))
         check("D1-b5: LODO arms present", len(sm[(sm.dataset == "dl21") & (
             sm.arm == "CORR_LODO")]) > 0)
+        b5_orig = b5csv.read_text()
         rows_b5 = read_b5_csv(b5csv)
         rows_b5[0]["RAW"] = f"{float(rows_b5[0]['RAW']) + 0.001:.4f}"
         with open(b5csv, "w") as f:
@@ -2407,6 +3444,7 @@ def cmd_selftest(args) -> None:
                         f"{r['CORR']}\n")
         check("b5 check: a 1e-3 perturbation of the B5 table hard-fails",
               _exits(lambda: run_d1_b5(a_b5, None, {}, lp, b5csv)))
+        b5csv.write_text(b5_orig)
 
         # ── 9. D3 + D1-students ─────────────────────────────────────────────
         a_st = _ns(**common, predictions=str(pred), evaluators="stub/eval",
@@ -2437,12 +3475,14 @@ def cmd_selftest(args) -> None:
               _exits(lambda: cmd_d3(a_noseal)))
         evp = next((root / "derived" / "batch7" / "eval").glob(
             "msmarco-ce/stub__teach/HUMAN_s1_dl22.json"))
-        jj = json.loads(evp.read_text())
+        ev_orig = evp.read_text()
+        jj = json.loads(ev_orig)
         jj["pairs"] = jj["pairs"][:-1]
         evp.write_text(json.dumps(jj))
         check("B7 universe drift (sha mismatch in one file) -> refuse",
               _exits(lambda: scan_students(root / "derived" / "batch7" /
                                            "eval")))
+        evp.write_text(ev_orig)
 
         # ── 10. local-calib ────────────────────────────────────────────────
         a_lc = _ns(**common, predictions=str(pred), judges="stub/lenient",
@@ -2459,6 +3499,145 @@ def cmd_selftest(args) -> None:
               "disjoint", cm.sum() == 3)
         check("de_summary.csv concatenates every subcommand",
               {"D2b", "D1a", "D3", "LC:D2b"} <= set(sm.decision))
+
+        # ── 11. addons (end-to-end on the stub data) ────────────────────────
+        a_ad = _ns(**common, predictions=str(pred),
+                   judges="stub/lenient,stub/noop,stub/eval",
+                   datasets="dl22,dl21,antique", evaluators="stub/eval",
+                   b5_check=str(b5csv), b=200, parts=",".join(ADDON_PARTS))
+        check("addons: no add-on pre-announcement in the DE block -> refuse",
+              _exits(lambda: cmd_addons(a_ad)))
+        pred.write_text(pred.read_text() + f"\n## {ADDONS_MARKER}（stub）\n"
+                        "1. RETHRESH ...\n")
+        _git_commit(repo, "DE add-ons pre-announced")
+        check("addons: dl22 parts without --unseal-dl22 -> refuse",
+              _exits(lambda: cmd_addons(_ns(**{**vars(a_ad),
+                                               "unseal_dl22": False}))))
+        check("addons: unknown part -> refuse",
+              _exits(lambda: cmd_addons(_ns(**{**vars(a_ad),
+                                               "parts": "rethresh,foo"}))))
+        sm_before = (od / "de_summary.csv").read_text()
+        cmd_addons(a_ad)
+        sa = pd.read_csv(od / "de_summary_addons.csv", keep_default_na=False)
+        check("addons: de_summary_addons.csv has the de_summary.csv columns; "
+              "de_summary.csv untouched",
+              tuple(sa.columns) == CSV_COLS
+              and (od / "de_summary.csv").read_text() == sm_before)
+
+        def ga(dec, ds, j, arm, grid, col="err"):
+            r = sa[(sa.decision == dec) & (sa.dataset == ds) & (sa.judge == j)
+                   & (sa.arm == arm) & (sa.grid == grid)]
+            return r.iloc[0][col] if len(r) else None
+        check("RETHRESH rows: D2a / D2b / D2c on every dataset, Δ vs RAW",
+              all(ga(dc, ds, "stub/lenient", "RETHRESH", gr) is not None
+                  for ds in ("dl22", "dl21", "antique")
+                  for dc, gr in (("D2a", "K=1"), ("D2c", "tol=0.2")))
+              and ga("D2b", "dl22", "stub/lenient", "RETHRESH_K", "K=3")
+              is not None
+              and ga("D2b", "dl22", "stub/lenient", "RETHRESH", "K=3",
+                     "d_ci") != "")
+        jr = json.loads((od / "de_addons_rethresh.json").read_text())
+        c22 = next(c for c in jr["datasets"]["dl22"]
+                   if c["model"] == "stub/lenient")
+        check("RETHRESH: train-fold rate gap <= the RAW threshold's gap; "
+              "lenient judge re-thresholds above the RAW t",
+              all(abs(f["train_judge_rate"] - f["train_human_rate"])
+                  <= abs(f["train_judge_rate_at_RAW_t"]
+                         - f["train_human_rate"]) + EPS
+                  for f in c22["rethresh"]["folds"]["RETHRESH"])
+              and all(f["t"] > c22["rethresh"]["t_raw"]
+                      for f in c22["rethresh"]["folds"]["RETHRESH"]),
+              str([(f["t"], round(f["train_judge_rate"], 3),
+                    round(f["train_human_rate"], 3))
+                   for f in c22["rethresh"]["folds"]["RETHRESH"]]))
+        check("RETHRESH: RAW/FROZEN cross-checked against de_d2-pool.json",
+              c22["crosscheck_d2_pool"].startswith("identical"))
+        e_rt = float(ga("D2b", "dl22", "stub/lenient", "RETHRESH", "K=3"))
+        check("RETHRESH lowers the lenient judge's K=3 error vs RAW",
+              e_rt < float(g("D2b", "dl22", "stub/lenient", "RAW", "K=3")),
+              f"{e_rt:.3f}")
+        jt = json.loads((od / "de_addons_trivial.json").read_text())
+        d2js = json.loads((od / "de_d2-pool.json").read_text())
+        ok_t = True
+        for ds, cells_t in jt["d2"].items():
+            for c in cells_t:
+                ref = next(x for x in d2js["datasets"][ds]
+                           if x["model"] == c["model"])
+                z = ref["descriptive"]["queries_with_0_human_rel"] / \
+                    ref["n_queries"]
+                p1 = c["point"]["D2a|K=1"]
+                ok_t &= (np.isclose(p1["ALWAYS_YES"], z)
+                         and np.isclose(c["share_queries_0_human_rel"], z)
+                         and np.isclose(p1["ALWAYS_NO"], 1 - z))
+        check("trivial D2: ALWAYS_YES(K=1) = share of zero-human-relevant "
+              "queries (= d2-pool descriptive); ALWAYS_NO = 1 - it", ok_t)
+        af = float(ga("D3", "dl22", "stub/eval", "ALWAYS_FAIL", "all"))
+        ap_ = float(ga("D3", "dl22", "stub/eval", "ALWAYS_PASS", "all"))
+        jcl = json.loads((od / "de_addons_d3cluster.json").read_text())
+        ecl = jcl["evaluators"][0]
+        hp = ecl["groups"]
+        check("trivial D3: ALWAYS_FAIL + ALWAYS_PASS = 1; ALWAYS_FAIL = "
+              "human pass rate (= D3cl point)",
+              np.isclose(af + ap_, 1.0)
+              and np.isclose(af, ecl["point"]["ALWAYS_FAIL"])
+              and np.isclose(af, np.average(
+                  [v["pass_rate"]["HUMAN"] for k, v in hp.items()
+                   if k.startswith("D3grp:")],
+                  weights=[v["n_students"] for k, v in hp.items()
+                           if k.startswith("D3grp:")])), f"{af} {ap_}")
+        check("D3cl: points == d3-validate rows, 8 configurations, cluster "
+              "CI present, Δ rows",
+              ecl["n_configs"] == 8 and ecl["n_students"] == 16
+              and ecl["crosscheck_d3"].startswith("points identical")
+              and all(np.isclose(float(ga("D3cl", "dl22", "stub/eval", T,
+                                          "all")),
+                                 float(g("D3", "dl22", "stub/eval", T,
+                                         "all")))
+                      for T in D3_ARMS)
+              and ga("D3cl", "dl22", "stub/eval", "FROZEN", "all", "d_ci")
+              != "")
+        cls = jcl["classes"]
+        check("label classes: MIX_200 intermediate / CORR_FROZEN human-scale "
+              "(disagree with spec), D3grp + D3grpspec rows",
+              cls["MIX_200"]["data_class"] == "intermediate"
+              and cls["CORR_FROZEN"]["data_class"] == "human-scale"
+              and set(jcl["disagreements"]) == {"MIX_200", "CORR_FROZEN"}
+              and ga("D3grp:intermediate", "dl22", "stub/eval", "RAW", "all")
+              is not None
+              and ga("D3grpspec:raw-scale", "dl22", "stub/eval", "RAW", "all")
+              is not None, str({k: v["data_class"] for k, v in cls.items()}))
+        jc = json.loads((od / "de_addons_d1curve.json").read_text())
+        pool = next(c for c in jc["curves"] if c["id"] == "pool")
+        zoo = next(c for c in jc["curves"] if c["id"] == "zoo:stub/eval")
+        i0 = jc["delta_grid"].index(0.0)
+        obs_raw = next(o for o in pool["observed"]
+                       if o["judge"] == "stub/lenient" and o["arm"] == "RAW")
+        check("D1curve: 61-point grid, 0 at δ=0, pool + zoo curves, observed "
+              "points == d1 rows",
+              len(jc["delta_grid"]) == 61 and pool["err"][i0] == 0.0
+              and zoo["err"][i0] == 0.0 and pool["n_systems"] == ST_SYSTEMS
+              and zoo["n_systems"] == 16
+              and np.isclose(obs_raw["err"], float(g("D1a", "dl21",
+                                                     "stub/lenient", "RAW",
+                                                     "-")))
+              and len(sa[(sa.decision == "D1curve")]) == 61 * 2
+              and len(zoo["observed"]) == 3)
+        mt = (od / "de_meta.txt").read_text()
+        check("meta: de_meta.txt lists every de_*.json with its "
+              "registration commit; add-on JSONs carry the add-on commit",
+              all(f in mt for f in ("de_d2-pool.json", "de_d1-b5.json",
+                                    "de_d3-validate.json",
+                                    "de_addons_rethresh.json"))
+              and regp["commit"].split(",")[0] in mt
+              and json.loads((od / "de_addons_d1curve.json").read_text())
+              ["meta"]["addons_registration_commit"] is not None)
+        n_before = len(sa)
+        cmd_addons(_ns(**{**vars(a_ad), "parts": "rethresh",
+                          "datasets": "dl21", "unseal_dl22": False}))
+        sa2 = pd.read_csv(od / "de_summary_addons.csv", keep_default_na=False)
+        check("addons: partial re-run (rethresh, dl21, no unseal) replaces "
+              "only its own rows",
+              len(sa2) == n_before)
 
     print()
     if failures:
@@ -2555,6 +3734,25 @@ def main() -> None:
     p.add_argument("--n", type=int, default=LC_N)
     p.add_argument("--r", type=int, default=LC_R)
     p.set_defaults(func=cmd_local_calib)
+
+    p = sub.add_parser("addons", help="pre-announced add-ons ('DE 探索性追加 "
+                       "2'): RETHRESH, trivial baselines, D3 cluster "
+                       "bootstrap + label classes, D1a curve, meta")
+    common(p, B_D2)
+    p.add_argument("--parts", default=",".join(ADDON_PARTS),
+                   help=f"subset of {','.join(ADDON_PARTS)} (default all)")
+    p.add_argument("--datasets", default="dl22,dl21,antique",
+                   help="D2 datasets for rethresh / trivial")
+    p.add_argument("--unseal-dl22", action="store_true")
+    p.add_argument("--judges", default=None, help="D2 judges (default B6's)")
+    p.add_argument("--flagships", default=None)
+    p.add_argument("--eval-root", default=None)
+    p.add_argument("--evaluators", default=None,
+                   help=f"default {','.join(EVALUATORS)} (first = primary)")
+    p.add_argument("--b5-check", default=None,
+                   help="b5_per_system_ndcg.csv for the D1a pool curve "
+                        "(default derived/decision_errors/)")
+    p.set_defaults(func=cmd_addons)
 
     p = sub.add_parser("selftest", help="synthetic offline self-test")
     p.add_argument("--keep-dir", default=None)
