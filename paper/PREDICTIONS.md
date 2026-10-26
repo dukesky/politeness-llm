@@ -1729,3 +1729,26 @@ arm 超过 FROZEN 的切分间离散）；更值得做（纯 CPU）：D2 加交�
   v4.1 −0.067、3.5 −0.001。即 200 对校准的直接度量修正在 D1a 上给出小而宽的改善，不及 v4 的 CORR，
   与 3.5 的 CORR 相当（两者都在阶跃平台附近）。
 - 判读：与评估员预测一致——无 arm 超过 FROZEN 的切分间离散；不进正文，不进 abstract。
+
+## DE 探索性追加 2（2026-10-25 登记，post-DE / pre-addons：半盲——DE 主结果与评估员复核均已见；代码写前写下；不计分）
+评估员复核 §F 建议的四项廉价补充 + 快照元数据，均不花 API：
+1. **D2 + RETHRESH 基线**：交叉拟合（query-disjoint 2 折，沿用 B6 followup2 的 RETHRESH 定义）的单参数重新阈值
+   —— 在 L3 记录均值分上选阈值 t*，使训练折的 judge 相关率与人类相关率匹配，留出折上以 score ≥ t* 为"相关"，
+   算 D2a/D2b/D2c 错误率，arm 名 RETHRESH；dl22 为主、dl21/antique 只报告。预期：RETHRESH 与 FROZEN 在多数格
+   相差 ≤0.02（协议第 5 步要求的"对照重新阈值"在决策层面的版本；FROZEN 的 map 本身就是一种重新阈值）。
+2. **平凡基线列**：D2 加 ALWAYS_YES（每个查询都判"可用 / 有 ≥K 个相关"）与 ALWAYS_NO；D3 加 ALWAYS_FAIL 与
+   ALWAYS_PASS。预期：D2a ALWAYS_YES 错误率 = 人类标签下无相关文档的查询比例（≈0.1–0.2），与 RAW 的 0.15–0.18
+   相当，即原始 judge 在 K=1 上几乎不优于平凡规则；D3 ALWAYS_FAIL = 0.224（人类标签下通过率），RAW 0.557 差于它。
+3. **D3 聚类 bootstrap 与按训练标签类分组**：对 64 个配置（arm×teacher×训练集）与 76 个查询联合重采样
+   （B=1000，seed 42）报告 RAW / FROZEN / SHIFT_FROZEN 错误率与 FROZEN−RAW 的 CI；并按训练标签类分组报告
+   （raw 刻度：RAW、MIX_200、MIX_1000、DIAL_ONLY；人类刻度：HUMAN、SHIFT_FULL、SHIFT_n1000；校正训练：
+   CORR_FROZEN、CORR_REFIT、CORR_REFIT_n200、CORR_REFIT_n1000、MAP_ONLY——分组依据各集的训练标签均值，
+   代码打印并固定）。预期：聚类 CI 明显变宽但 FROZEN−RAW 仍不含 0；raw 刻度组在 RAW 测试标签下近乎全通过、
+   人类标签下近乎全不通过，人类刻度组相反，校正训练组介于两者之间。
+4. **D1a 常数偏移曲线（附录图）**：对 B5 的 13 系统人类 NDCG 向量与学生 zoo 的人类 NDCG 向量，加常数偏移
+   δ ∈ [−0.15, +0.15]（步长 0.005）算 D1a 错误率曲线，并标出各 judge/arm 的实测 (mean offset, err) 点。
+   预期：池子曲线在 |δ| ≥ 0.04 处平台 0.308、δ=0 为 0；zoo 曲线平台 0.2487；实测点落在曲线上。
+   该图替代正文/附录中的 D1a-dl22 行。
+5. **快照元数据**：把 de_*.json 的 registration_commit / git_hash / code_dirty 打印并存入内部 tables/de/。
+判读规则：全部描述性，不计命中；任何与预期相反的结果如实记录。实现：scripts/decision_errors.py 新子命令
+（addons），notebook h9d；结果 Drive derived/decision_errors/de_addons_*。
