@@ -1740,8 +1740,8 @@ def cmd_selftest(args) -> None:
         _git_commit(repo, "init")
         a_run = _ns(**common, predictions=str(pred), b=100)
         with contextlib.redirect_stdout(io.StringIO()):
-            check("gate: no IC heading -> refuse",
-                  _exits(lambda: cmd_run(a_run)))
+            r_ = _exits(lambda: cmd_run(a_run))
+        check("gate: no IC heading -> refuse", r_)
         block = txt.splitlines()
         pred.write_text(pred.read_text() + "\n" + "\n".join(block) + "\n")
         _git_commit(repo, "unfilled")
@@ -1770,16 +1770,16 @@ def cmd_selftest(args) -> None:
         bad = {"shas": dict(regp["shas"]), "preds": {}}
         bad["shas"]["qrels:dl21"] = "0" * 64
         with contextlib.redirect_stdout(io.StringIO()):
-            check("sha mismatch -> refuse", _exits(lambda: check_shas(
-                bad, input_shas(ctx))))
+            r1 = _exits(lambda: check_shas(bad, input_shas(ctx)))
             del bad["shas"]["qrels:dl21"]
-            check("sha unregistered -> refuse", _exits(lambda: check_shas(
-                bad, input_shas(ctx))))
+            r2 = _exits(lambda: check_shas(bad, input_shas(ctx)))
+        check("sha mismatch -> refuse", r1)
+        check("sha unregistered -> refuse", r2)
         a_seal = _ns(**common, predictions=str(pred), unseal_dl22=False)
         with contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(io.StringIO()):
-            check("run: dl22 without --unseal-dl22 -> refuse",
-                  _exits(lambda: cmd_run(a_seal)))
+            r_ = _exits(lambda: cmd_run(a_seal))
+        check("run: dl22 without --unseal-dl22 -> refuse", r_)
         with contextlib.redirect_stdout(io.StringIO()) as buf:
             out = cmd_run(a_run)
         od = out["out_dir"]
