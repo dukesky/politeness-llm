@@ -1775,3 +1775,34 @@ tables/de/ 快照；图 figures/f7_d1a_curve.pdf）。与预告逐条对照（�
 5. 元数据：de_meta.txt 列出全部 de_*.json 的 registration_commit / git_hash / code_dirty，已入内部快照。
 判读（待评估员复核）：补充项全部为描述性；它们把 §5.8 的三个限定坐实——D2 的 K=1 决策上原始 judge 不优于平凡
 规则、D3 的"全判不通过"基线 0.22、D1a 的阶跃结构——并给出 D3 更诚实的（更宽的）区间。
+
+**DE 追加 2 评估员复核与勘误（Sonnet，2026-10-26；内部 docs/evaluator_reports/2026-10-26_de_addons_sonnet.md）**
+完整性：重算 RAW/FROZEN 与 de_d2-pool.json / de_d3-validate.json 逐位一致；曲线由人类 NDCG 向量重推 max|diff| 0；
+D3 通过人数精确（v4.1 评估：HUMAN 43 / RAW 64 / FROZEN 16 / SHIFT_FROZEN 1，共 192；v4：27/40/8 之 120；
+3.5：18/20/4 之 120；3.8：41/19/19 之 144）；元数据（git_hash、code_dirty=False、registration_commit）已入快照。
+**预告措辞勘误**：(1) "沿用 B6 followup2 的 RETHRESH 定义"与随后的"相关率匹配"矛盾——B6（§5.6 (iii)）的基线是 κ
+选阈的 RETHRESH_K；相关率匹配是本追加新定义的 RETHRESH，且"匹配"只是名义上的（投票和网格步长 1/6，训练折
+相关率 v4.1 0.252 vs 人类 0.161、v4 0.107 vs 0.161）。"多数格 ≤0.02"：dl22 名义 18/30，去掉 no-op judge 与 flagship
+K=10 地板格后 11/23，"约一半"为安全措辞；dl21 9/30 且非同口径（FROZEN 部分 in-sample、RETHRESH 交叉拟合）。
+最有用的事实：在论文用的 20 个 dl22 对比上，FROZEN 与 RETHRESH 的计数完全相同（低于带 8 / 高于 4 / 带内 8），
+RETHRESH_K 为 5/3/12；RETHRESH 的 CI 为 eval-only（每次重复不重拟合），不得用其 CI 排除数作证据。
+(2) 平凡基线 0.1–0.2 只对 flash universe 成立（0.145）；flagship 40% universe 为 0.276，且 raw flagship 在 K=1 优于它
+约 0.11（仅 gpt 的区间不含 0）。flash judge 相对更优的常数规则：K=1 与 K=10 不优于（K=10 ALWAYS_NO 0.105，RAW
+0.118–0.263、FROZEN 0.118–0.197 全部不优于或持平），K=3 明显优于（RAW 0.22–0.30 vs 0.421），K=5 弱优于；
+16 个 flash 格 RAW 胜 7 / 平 4 / 负 5，FROZEN 8/2/6。回填中"K=3 RAW/FROZEN 明显优于两者"只对 flash 成立
+（flagship ALWAYS_NO 0.237，RAW 0.250/0.263 不优于）。(3) "明显变宽"实为 1.16–1.37 倍；符号均不变。(4) "校正训练
+组介于两者之间"错误：五个校正训练集的合并 r 为 0.10–0.26，按标签均值属人类刻度；"近乎全通过"半错（raw-scale
+在 RAW 标签下通过 0.68，human-scale 在人类标签下 0.34）；合并 r 规则把 3.8 教的 CORR_FROZEN/CORR_REFIT_n1000
+（no-op，等于 RAW，teacher 级 r 1.00/1.01）误归 human-scale（126 中的 12 个）；1/3、2/3 阈值为任意。raw-scale 类
+贡献 FROZEN−RAW 差距的 56%。(5) "实测点落在曲线上"只在平台成立（17 格中 16 格在 0.02 内）；陡峭段 7 格中 6 格
+偏离 0.02 以上（−0.09 到 +0.07），因各系统的偏移不是常数。(6) D3 ALWAYS_FAIL 是评估者特定的（= 该评估者可评
+学生的人类通过率：0.224/0.225/0.150/0.285），不得跨行当作共同基线；3.8 的 RAW 优于 0.285 的差 +0.076 区间含 0，
+且其优势全部来自 msmarco-ce 簇；FROZEN 优于基线仅为点估计（16/8/4 个学生），无配对区间，不得写"显著"。
+**评估员自身更正**：10-25 报告 §D 与现 main.tex 中"学生当系统 error 0.247–0.249 in every cell"为误：12 格中 8 格在
+0.247–0.249，其余 4 格为 0.196、0.200、0.230、0.236（陡峭段）。
+**新增不得写**：FROZEN 每格不差于重新阈值 / RETHRESH 匹配了人类相关率；RETHRESH(_K) 的区间计数；dl21/antique 上
+RETHRESH vs FROZEN 作为方法比较；"原始 judge 优于平凡规则"不带"K=3（及 K=5）、flash judge"限定；跨评估者比较
+ALWAYS_FAIL；"FROZEN 显著优于全判不通过"；3.5 上"校正对人类刻度学生有帮助"或不带合并缺陷脚注；"聚类 bootstrap
+覆盖了训练变异"；"judge 的 D1a 错误由均值偏移决定 / 点落在曲线上"（仅平台）；"每格 0.247–0.249"；把校正训练学生
+称为中间类；把 RETHRESH 称为 §5.6 基线。
+判定：DE 研究在 §5.8 按 §B 改写、附录加入 f7（按 §E 修图）、RETHRESH 表、聚类区间表、分类表后关闭；无需再一轮复核。
