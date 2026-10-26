@@ -1752,3 +1752,26 @@ arm 超过 FROZEN 的切分间离散）；更值得做（纯 CPU）：D2 加交�
 5. **快照元数据**：把 de_*.json 的 registration_commit / git_hash / code_dirty 打印并存入内部 tables/de/。
 判读规则：全部描述性，不计命中；任何与预期相反的结果如实记录。实现：scripts/decision_errors.py 新子命令
 （addons），notebook h9d；结果 Drive derived/decision_errors/de_addons_*。
+2026-10-26 跑完（addons 子命令，代码 45dc6ed；gate/sha 通过；重算的 RAW/FROZEN 与 de_d2-pool.json / de_d3-validate.json
+逐位一致；原始输出 Drive derived/decision_errors/de_addons*.{txt,json}、de_summary_addons.csv、de_meta.txt；内部
+tables/de/ 快照；图 figures/f7_d1a_curve.pdf）。与预告逐条对照（描述性，不计分）：
+1. RETHRESH（相关率匹配、交叉拟合）vs FROZEN 在 |Δerr| ≤ 0.02 内：dl22 18/30、dl21 9/30、antique 20/24 的
+   (judge×决策) 格 → 预告"多数格 ≤0.02"在 dl22/antique 成立、dl21 不成立（dl21 上 RETHRESH 多半比 FROZEN 更差，
+   如 opus K=3 0.358 vs 0.302）。RETHRESH_K（B6 的 κ 匹配阈值）附带报告，常与 RAW 同阈值。
+2. 平凡基线：dl22 零人类相关查询占 0.145（flash universe）/ 0.276（flagship 40% universe）。D2a K=1 ALWAYS_YES
+   错误率 = 0.145，与 RAW 0.145–0.184 相当甚至更低（v4.1/3.5/3.8 RAW 0.184 > 0.145）→ 预告成立：原始 judge 在
+   "查询是否可用"上不优于"全判可用"。K=3 ALWAYS_YES 0.421、ALWAYS_NO 0.579，RAW/FROZEN 明显优于两者。
+   D3 ALWAYS_FAIL：v4.1 0.224、v4 0.225、3.5 0.150、3.8 0.285；RAW 0.557/0.558 差于基线（v4.1/v4），3.5 RAW 0.217
+   差于 0.150，3.8 RAW 0.208 优于 0.285（no-op judge，偏移最小）。FROZEN 在 v4.1/v4/3.5 优于基线（0.141/0.158/0.117）。
+3. D3 聚类 bootstrap（64 配置 × 76 查询）：primary RAW 0.557 [0.370,0.688]（仅查询 [0.406,0.677]）、FROZEN 0.141
+   [0.078,0.286]（[0.109,0.261]）、FROZEN−RAW −0.417 [−0.495,−0.224]（[−0.458,−0.266]）→ 区间变宽、结论不变，
+   与预告一致。训练标签类：数据驱动规则（r = 训练标签均值相对偏移 / RAW 的相对偏移；r≥2/3 raw-scale、r≤1/3
+   human-scale）把 CORR_FROZEN/CORR_REFIT/REFIT_n200/REFIT_n1000/MAP_ONLY 全部归入 human-scale（r 0.10–0.26），
+   与预告的"校正训练"独立成类不符（冻结规则过度校正使其标签均值与人类同水平或更低）。按数据驱动类：raw-scale
+   66 个学生 RAW 标签下通过 0.68、人类标签下 0.00、FROZEN 0.00；human-scale 126 个学生 HUMAN 0.34、RAW 0.15、
+   FROZEN 0.13、SHIFT_FROZEN 0.01；错误率 raw-scale RAW 0.682 / FROZEN 0.000，human-scale RAW 0.492 / FROZEN 0.214。
+4. D1a 常数偏移曲线：池子平台 0.3077（簇 [10,3]，簇内最大跨度 0.034，平台对 0.034<|δ|<0.124 成立）；zoo 平台
+   0.2487（[96,96]，0.065<|δ|<0.238）；各 judge/arm 实测点落在曲线上（图 f7）。与预告一致。
+5. 元数据：de_meta.txt 列出全部 de_*.json 的 registration_commit / git_hash / code_dirty，已入内部快照。
+判读（待评估员复核）：补充项全部为描述性；它们把 §5.8 的三个限定坐实——D2 的 K=1 决策上原始 judge 不优于平凡
+规则、D3 的"全判不通过"基线 0.22、D1a 的阶跃结构——并给出 D3 更诚实的（更宽的）区间。
