@@ -72,6 +72,17 @@ Subcommands
             needs --unseal-dl22; every input sha256 must be registered
             ("sha256[<name>]: <hex>") and match.  Computes A-E, adjudicates
             the registered prediction lines, writes the outputs.
+  addons    post-IC EXPLORATORY add-ons pre-announced under "## IC 探索性追加"
+            (descriptive, unscored): --parts bound,crosstab,depthdedupe,mass
+            (default all).  Gate = run's gate + that heading inside the
+            committed IC block; --unseal-dl22 needed for dl22.  bound = relabel
+            bound (h=0 pairs that >=k of the m cheap judges label >=2 -> grade
+            2; Δ and relevant-set ratio before/after; Δ before asserted ==
+            ic_A.json); mass = h=0 share / off(0) mass by judge label;
+            crosstab = cheap-pooled judge label x human grade; depthdedupe =
+            dl22 withDupes check, Bq without duplicate propagation only from a
+            user-supplied --dl22-nodupes-qrels.  Outputs
+            ic_addons_<part>.json, ic_summary_addons.csv, ic_addons_log.txt.
   selftest  synthetic, offline (scale-shift judges vs missing-positive
             judges, gate in a temp git repo, sha checks, paste invariance,
             end-to-end run); must print "ALL SELFTESTS PASSED".
@@ -93,6 +104,7 @@ Usage (Colab, repo root):
     python scripts/incompleteness_check.py selftest
     python scripts/incompleteness_check.py paste
     python scripts/incompleteness_check.py run --unseal-dl22      # after commit
+    python scripts/incompleteness_check.py addons --unseal-dl22   # after run
 CPU only, no API calls.
 """
 
@@ -1392,6 +1404,642 @@ def cmd_run(args) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# addons — post-IC EXPLORATORY add-ons (pre-announced, descriptive, unscored)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Pre-announced in paper/PREDICTIONS.md under "## IC 探索性追加（2026-11-06
+# 预告…）" (inside the IC block), after the evaluator report
+# docs/evaluator_reports/2026-11-06_ic_unboxing_sonnet.md §B / §F 1, 4, 6.
+# Semi-blind (A/B/E and the review already seen); nothing here is scored.
+#
+#   bound        relabel bound: per dataset, the cheap judges on their common
+#                universe (as E); flag human-0 pairs with RAW_lab >= 2 from
+#                >= k of the m cheap judges (k = 1, 2, 3; primary k = 2);
+#                relabel flagged pairs to human grade 2; per judge (ALL judges,
+#                flagships on their 40% universe; a pair outside the cheap
+#                common set is never flagged) Δ = mean(RAW − h) and the
+#                relevant-set ratio #(RAW_lab >= 2) / #(h >= 2) before / after.
+#                Circular UPPER bound built from LLM labels — never a
+#                missed-positive rate.  Δ before is asserted == ic_A.json.
+#   mass         per judge x dataset, human-0 pairs: share by RAW_lab 0..3 and
+#                share of the off(0) mass Σ RAW (h = 0) carried by each label
+#                (own universe; cheap judges also on the cheap common universe,
+#                the evaluator's set).
+#   crosstab     per dataset, cheap judges pooled on the common universe:
+#                counts RAW_lab x human grade, E[h | label], P(label | h),
+#                P(h | label).
+#   depthdedupe  dl22: is the loaded qrels the TREC DL 2022 withDupes file
+#                (386,416 judgments; duplicate-propagated labels)?  Neither
+#                the repo nor ir_datasets (msmarco-passage-v2/trec-dl-2022
+#                [/judged] = withDupes only; msmarco-passage-v2/dedup has no
+#                qrels — checked 2026-11-06) offers a non-dupes qrels, so Bq is
+#                recomputed only from a user-supplied file
+#                (--dl22-nodupes-qrels, TREC format); otherwise "not available;
+#                Bq|dl22 flagged not interpretable" and no Bq number.
+
+ADDON_MARKER = "## IC 探索性追加"
+ADDON_PARTS = ("bound", "crosstab", "depthdedupe", "mass")
+BOUND_RULES = (1, 2, 3)           # flag iff >= k of the m cheap judges say >= 2
+BOUND_PRIMARY = 2
+RELABEL_GRADE = 2
+DL22_WITHDUPES_LINES = 386416     # 2022.qrels.pass.withDupes.txt (76 queries)
+NODUPES_NA = ("not available; Bq|dl22 flagged not interpretable (the loaded "
+              "dl22 qrels is the withDupes file and no non-dupes qrels is "
+              "available offline: none in the repo, none in ir_datasets)")
+
+
+def addons_gate(dl22: bool, unseal: bool, path: Path,
+                clean_fn=b7.file_committed) -> dict:
+    """The run gate (committed, filled IC block, dl22 unseal) PLUS the add-on
+    heading '## IC 探索性追加' inside the committed IC block."""
+    reg = ic_gate(dl22, unseal, path, clean_fn)
+    block = ic_block(path.read_text(encoding="utf-8")) or ""
+    if not any(ln.startswith(ADDON_MARKER) for ln in block.splitlines()):
+        sys.exit(f"ERROR: the committed IC block in {path} has no heading "
+                 f"'{ADDON_MARKER}…' — pre-announce the add-ons and commit "
+                 f"before running them.")
+    return reg
+
+
+def parse_parts(spec: str) -> list[str]:
+    if spec.strip().lower() == "all":
+        return list(ADDON_PARTS)
+    ps = [p.strip() for p in spec.split(",") if p.strip()]
+    bad = [p for p in ps if p not in ADDON_PARTS]
+    if bad or not ps:
+        sys.exit(f"ERROR: --parts {spec!r}: unknown part(s) {bad}; choose "
+                 f"from {ADDON_PARTS} or 'all'.")
+    return [p for p in ADDON_PARTS if p in ps]
+
+
+def cheap_common(cells: dict, ds: str, judges, cheap) -> dict | None:
+    """Cheap judges' common universe (E's set): labels, RAW, human grade."""
+    cj = [cells[(ds, m)] for m in judges if m in cheap
+          and "error" not in cells.get((ds, m), {"error": 1})]
+    if len(cj) < 2:
+        return None
+    common = set(cj[0]["universe"])
+    for c in cj[1:]:
+        common &= set(c["universe"])
+    keys = sorted(common)
+    n, m = len(keys), len(cj)
+    lab = np.zeros((n, m), dtype=np.int64)
+    raw = np.zeros((n, m), dtype=float)
+    h = None
+    for j, c in enumerate(cj):
+        pos = {k: i for i, k in enumerate(c["universe"])}
+        ii = np.array([pos[k] for k in keys], dtype=np.int64)
+        lab[:, j] = c["raw_lab"][ii]
+        raw[:, j] = c["raw"][ii]
+        hj = c["h"][ii]
+        if h is None:
+            h = hj
+        elif not np.array_equal(h, hj):
+            sys.exit("ERROR: addons: human grades differ across judges on the "
+                     "common pairs — qrels join inconsistent.")
+    return {"judges": [c["model"] for c in cj], "keys": keys, "lab": lab,
+            "raw": raw, "h": h if h is not None else np.zeros(0, np.int64)}
+
+
+# ── bound ────────────────────────────────────────────────────────────────
+
+def bound_judge(c: dict, flagged: set, B: int, seed: int) -> dict:
+    h, raw, lab, q, nq = c["h"], c["raw"], c["raw_lab"], c["pair_q"], \
+        c["n_queries"]
+    flag = np.array([k in flagged for k in c["universe"]], dtype=bool)
+    if (h[flag] != 0).any():                                  # pragma: no cover
+        sys.exit("ERROR: bound: a flagged pair is not human grade 0.")
+    h2 = np.where(flag, RELABEL_GRADE, h)
+    _idx, W = boot_weights(nq, B, seed)
+    N = np.bincount(q, minlength=nq).astype(float)
+    Sb = np.bincount(q, weights=raw - h, minlength=nq)
+    Sa = np.bincount(q, weights=raw - h2, minlength=nq)
+    Lr = np.bincount(q, weights=(lab >= REL).astype(float), minlength=nq)
+    Hb = np.bincount(q, weights=(h >= REL).astype(float), minlength=nq)
+    Ha = np.bincount(q, weights=(h2 >= REL).astype(float), minlength=nq)
+    db = float((raw - h).mean())          # == analysis_A delta (asserted)
+    da = float((raw - h2).mean())
+    nl, nb, na = float(Lr.sum()), float(Hb.sum()), float(Ha.sum())
+    return {"n": int(len(h)), "n_flagged": int(flag.sum()),
+            "delta_before": db, "delta_before_ci": ci90(ratio_boot(W, Sb, N)),
+            "delta_after": da, "delta_after_ci": ci90(ratio_boot(W, Sa, N)),
+            "delta_change": da - db,
+            "delta_change_ci": ci90(ratio_boot(W, Sa - Sb, N)),
+            "delta_rel_change": (da - db) / db if db != 0 else None,
+            "sign_flip": bool(sgn(da) != sgn(db)),
+            "n_rel_judge": int(nl), "n_rel_human_before": int(nb),
+            "n_rel_human_after": int(na),
+            "ratio_before": nl / nb if nb else None,
+            "ratio_before_ci": ci90(ratio_boot(W, Lr, Hb)),
+            "ratio_after": nl / na if na else None,
+            "ratio_after_ci": ci90(ratio_boot(W, Lr, Ha))}
+
+
+def addon_bound(cells: dict, ds: str, judges, cc: dict, B: int,
+                seed: int) -> dict:
+    h, lab, keys = cc["h"], cc["lab"], cc["keys"]
+    m = len(cc["judges"])
+    nrel = (lab >= REL).sum(axis=1)
+    n_h0 = int((h == 0).sum())
+    out = {"cheap_judges": cc["judges"], "m": m, "n_common": len(keys),
+           "n_common_h0": n_h0,
+           "n_common_queries": len({k[0] for k in keys}),
+           "n_common_h0_queries": len({k[0] for k, g in zip(keys, h)
+                                       if g == 0}),
+           "relabel_grade": RELABEL_GRADE, "primary_rule": BOUND_PRIMARY,
+           "rules": {}}
+    for k in BOUND_RULES:
+        if k > m:
+            continue
+        sel = (h == 0) & (nrel >= k)
+        F = [keys[i] for i in np.flatnonzero(sel)]
+        Fs = set(F)
+        qc: dict = {}
+        for qq, _d in F:
+            qc[qq] = qc.get(qq, 0) + 1
+        top = sorted(qc.values(), reverse=True)
+        r = {"rule": f"≥{k}/{m}", "n_flagged": len(F),
+             "share_of_h0": len(F) / n_h0 if n_h0 else None,
+             "share_of_common": len(F) / len(keys) if keys else None,
+             "n_queries": len(qc),
+             "top5_query_share": sum(top[:5]) / len(F) if F else None,
+             "flagged_pairs": [f"{a}|{b}" for a, b in F], "judges": {}}
+        for mod in judges:
+            c = cells.get((ds, mod))
+            if c is None or "error" in c:
+                continue
+            r["judges"][mod] = bound_judge(c, Fs, B, seed)
+            r["judges"][mod]["flagship40"] = bool(c["flagship"])
+        out["rules"][k] = r
+    return out
+
+
+def assert_bound_vs_A(bound: dict, icA: dict) -> int:
+    """Δ before (recomputed) must equal ic_A.json's delta for every cell."""
+    n = 0
+    for ds, b in bound.items():
+        if "rules" not in b or not b["rules"]:
+            continue
+        r = next(iter(b["rules"].values()))
+        for mod, jb in r["judges"].items():
+            a = icA.get(f"{ds}|{mod}")
+            if a is None:
+                sys.exit(f"ERROR: bound: {ds}|{mod} missing from ic_A.json — "
+                         f"re-run `run` on the same inputs first.")
+            if abs(jb["delta_before"] - a["delta"]) > 1e-12:
+                sys.exit(f"ERROR: bound: {ds}|{mod} Δ before "
+                         f"{jb['delta_before']!r} != ic_A.json delta "
+                         f"{a['delta']!r} — inputs or universe drifted.")
+            n += 1
+    return n
+
+
+# ── mass ─────────────────────────────────────────────────────────────────
+
+def mass_shares(raw: np.ndarray, lab: np.ndarray, h: np.ndarray) -> dict:
+    s = h == 0
+    n0 = int(s.sum())
+    if n0 == 0:
+        return {"n_h0": 0}
+    r, l = raw[s], lab[s]
+    tot = float(r.sum())                  # off(0) mass = Σ (RAW − 0)
+    ms = [float(r[l == g].sum() / tot) if tot > 0 else None for g in GRADES]
+    return {"n_h0": n0, "off0": float(r.mean()),
+            "share_lab": [float((l == g).mean()) for g in GRADES],
+            "share_lab_ge2": float((l >= REL).mean()),
+            "mass_share_lab": ms,
+            "mass_share_lab_ge2": (ms[2] + ms[3]) if tot > 0 else None}
+
+
+def addon_mass(cells: dict, ds: str, judges, cc: dict | None) -> dict:
+    out = {}
+    for mod in judges:
+        c = cells.get((ds, mod))
+        if c is None or "error" in c:
+            continue
+        e = {"flagship40": bool(c["flagship"]), "cheap": bool(c["cheap"]),
+             "own": mass_shares(c["raw"], c["raw_lab"], c["h"])}
+        if cc is not None and mod in cc["judges"]:
+            j = cc["judges"].index(mod)
+            e["common"] = mass_shares(cc["raw"][:, j], cc["lab"][:, j],
+                                      cc["h"])
+        out[mod] = e
+    return out
+
+
+# ── crosstab ─────────────────────────────────────────────────────────────
+
+def addon_crosstab(cc: dict) -> dict:
+    m = len(cc["judges"])
+    L = cc["lab"].ravel()
+    H = np.repeat(cc["h"], m)
+    cnt = np.zeros((4, 4), dtype=np.int64)          # [label, human grade]
+    np.add.at(cnt, (L, H), 1)
+    G = np.arange(4, dtype=float)
+    rs, cs = cnt.sum(axis=1), cnt.sum(axis=0)
+    return {"cheap_judges": cc["judges"], "m": m, "n_common": len(cc["keys"]),
+            "n_by_grade": [int((cc["h"] == g).sum()) for g in GRADES],
+            "counts_lab_by_h": cnt.tolist(),
+            "E_h_given_lab": [float(cnt[l] @ G / rs[l]) if rs[l] else None
+                              for l in GRADES],
+            "E_lab_given_h": [float(G @ cnt[:, g] / cs[g]) if cs[g] else None
+                              for g in GRADES],
+            "P_lab_given_h": [[float(cnt[l, g] / cs[g]) if cs[g] else None
+                               for l in GRADES] for g in GRADES],
+            "P_h_given_lab": [[float(cnt[l, g] / rs[l]) if rs[l] else None
+                               for g in GRADES] for l in GRADES]}
+
+
+# ── depthdedupe ──────────────────────────────────────────────────────────
+
+def read_trec_qrels_counts(path: Path) -> tuple[dict, str, int]:
+    """Per-query count of unique (qid, docid) in a TREC qrels file
+    ('qid Q0 docid grade' or 'qid docid grade')."""
+    seen = set()
+    for ln in Path(path).read_text(encoding="utf-8").splitlines():
+        p = ln.split()
+        if not p:
+            continue
+        if len(p) == 4:
+            seen.add((p[0], p[2]))
+        elif len(p) == 3:
+            seen.add((p[0], p[1]))
+        else:
+            sys.exit(f"ERROR: {path}: unparseable qrels line {ln!r}.")
+    cnt: dict = {}
+    for q, _d in seen:
+        cnt[q] = cnt.get(q, 0) + 1
+    return cnt, b6.sha256_file(Path(path)), len(seen)
+
+
+def addon_depthdedupe(ctx: dict, cells: dict, judges, B: int, seed: int,
+                      nodupes: str | None,
+                      withdupes_lines: int = DL22_WITHDUPES_LINES) -> dict:
+    ds = "dl22"
+    if ds not in ctx["datasets"]:
+        return {"status": "dl22 not in scope"}
+    cnt: dict = {}
+    for (dd, q, _d) in ctx["qrels"]:
+        if dd == ds:
+            cnt[q] = cnt.get(q, 0) + 1
+    n_lines = ctx["qshas"][ds][1]
+    v = np.array(sorted(cnt.values()), dtype=float)
+    out = {"n_judgments_loaded": int(n_lines), "n_queries_qrels": len(cnt),
+           "withdupes_lines": int(withdupes_lines),
+           "is_withdupes": bool(n_lines == withdupes_lines),
+           "per_query_loaded_q": _quant(v) if v.size else None,
+           "repo_dedup_path": False,
+           "ir_datasets_nodupes_variant": False}
+    if nodupes is None:
+        if out["is_withdupes"]:
+            out["status"] = "not available"
+            out["note"] = NODUPES_NA
+        else:
+            out["status"] = ("loaded dl22 qrels is not the withDupes file "
+                             "(count differs); Bq|dl22 from `run` stands")
+        return out
+    ncnt, nsha, nlines = read_trec_qrels_counts(Path(nodupes))
+    missing = sorted(set(cnt) - set(ncnt))
+    out.update({"status": "recomputed", "nodupes_file": str(nodupes),
+                "nodupes_sha256": nsha, "nodupes_lines": nlines,
+                "nodupes_queries_missing": missing,
+                "per_query_nodupes_q": _quant([ncnt.get(q, 0) for q in cnt])
+                if cnt else None, "judges": {}})
+    for mod in judges:
+        c = cells.get((ds, mod))
+        if c is None or "error" in c:
+            continue
+        idx, W = boot_weights(c["n_queries"], B, seed)
+        q = c["pair_q"]
+        dep_u = np.bincount(q, minlength=c["n_queries"]).astype(float)
+        oq = np.bincount(q, weights=c["raw"] - c["h"],
+                         minlength=c["n_queries"]) / dep_u
+        dn = np.array([ncnt.get(qq, 0) for qq in c["qnames"]], dtype=float)
+        out["judges"][mod] = {
+            "flagship40": bool(c["flagship"]), "n_queries": int(c["n_queries"]),
+            "qrels_depth_withdupes_q": _quant(c["qdepth"]),
+            "qrels_depth_nodupes_q": _quant(dn),
+            "Bq_withdupes": depth_stats(c["qdepth"], oq, idx, W),
+            "Bq_nodupes": depth_stats(dn, oq, idx, W)}
+    return out
+
+
+# ── driver / printing / rows ─────────────────────────────────────────────
+
+def run_addons(ctx: dict, cells: dict, parts, B: int, seed: int,
+               nodupes: str | None = None,
+               withdupes_lines: int = DL22_WITHDUPES_LINES) -> dict:
+    judges = ctx["judges"]
+    res: dict = {p: {} for p in parts}
+    for ds in ctx["datasets"]:
+        cc = cheap_common(cells, ds, judges, ctx["cheap"])
+        if "bound" in parts:
+            res["bound"][ds] = addon_bound(cells, ds, judges, cc, B, seed) \
+                if cc is not None else {"note": "fewer than 2 cheap judges"}
+        if "mass" in parts:
+            res["mass"][ds] = addon_mass(cells, ds, judges, cc)
+        if "crosstab" in parts:
+            res["crosstab"][ds] = addon_crosstab(cc) if cc is not None else \
+                {"note": "fewer than 2 cheap judges"}
+    if "depthdedupe" in parts:
+        res["depthdedupe"] = addon_depthdedupe(ctx, cells, judges, B, seed,
+                                               nodupes, withdupes_lines)
+    return res
+
+
+def print_addons(res: dict, cells: dict, datasets, judges) -> None:
+    def pct(x):
+        return "n/a" if x is None else f"{100 * x:.1f}%"
+    if "bound" in res:
+        say("\n" + "=" * 100)
+        say("BOUND — relabel human-0 pairs that ≥k of the m cheap judges label "
+            "≥2 to grade 2 (circular UPPER bound; not a miss rate)")
+        say("=" * 100)
+        for ds in datasets:
+            b = res["bound"].get(ds, {})
+            if "rules" not in b:
+                say(f"\n  {ds}: n/a ({b.get('note')})")
+                continue
+            say(f"\n  {ds}: m={b['m']} cheap judges ("
+                + ", ".join(short(j) for j in b["cheap_judges"])
+                + f"); common {b['n_common']} pairs / {b['n_common_queries']} "
+                f"q, h=0 {b['n_common_h0']} pairs / "
+                f"{b['n_common_h0_queries']} q")
+            for k, r in b["rules"].items():
+                say(f"    rule {r['rule']}: flagged {r['n_flagged']} "
+                    f"({pct(r['share_of_h0'])} of h=0; "
+                    f"{pct(r['share_of_common'])} of common) in "
+                    f"{r['n_queries']} q; top-5 queries hold "
+                    f"{pct(r['top5_query_share'])}"
+                    + ("   [primary]" if k == BOUND_PRIMARY else ""))
+            say(f"    {'judge':<26} {'nflag':>5} {'Δ before':>8} "
+                + "".join(f"{'Δ ' + b['rules'][k]['rule'] + ' [90% CI]':>28}"
+                          for k in b["rules"])
+                + f" {'ratio before':>12} "
+                + "".join(f"{'ratio ' + b['rules'][k]['rule']:>12}"
+                          for k in b["rules"]))
+            for mod in judges:
+                rr = [b["rules"][k]["judges"].get(mod) for k in b["rules"]]
+                if rr[0] is None:
+                    continue
+                j0 = rr[0]
+                prim = b["rules"].get(BOUND_PRIMARY, b["rules"][min(
+                    b["rules"])])["judges"][mod]
+                say(f"    {jlabel(cells[(ds, mod)], mod):<26} "
+                    f"{prim['n_flagged']:>5} {_f(j0['delta_before']):>8} "
+                    + "".join(
+                        f"{_f(j['delta_after']) + ' ' + _ci(j['delta_after_ci']) + (' FLIP' if j['sign_flip'] else ''):>28}"
+                        for j in rr)
+                    + f" {_f(j0['ratio_before'], 2, False):>12} "
+                    + "".join(f"{_f(j['ratio_after'], 2, False):>12}"
+                              for j in rr))
+            say("    (nflag = flagged pairs in the judge's own universe under "
+                f"the primary rule ≥{BOUND_PRIMARY}/m; ratio = #(RAW_lab≥2) / "
+                "#(human≥2) on the judge's universe)")
+    if "mass" in res:
+        say("\n" + "=" * 100)
+        say("MASS — human-0 pairs: share by judge label (RAW_lab 0/1/2/3) and "
+            "share of the off(0) mass Σ RAW carried by label 1 and label ≥2")
+        say("=" * 100)
+        for ds in datasets:
+            md = res["mass"].get(ds, {})
+            say(f"\n  {ds}")
+            say(f"    {'judge':<26} {'univ':<6} {'n_h0':>5} {'off0':>7} "
+                f"{'lab0':>6} {'lab1':>6} {'lab2':>6} {'lab3':>6} "
+                f"{'mass lab0':>9} {'mass lab1':>9} {'mass ≥2':>8}")
+            for mod in judges:
+                e = md.get(mod)
+                if e is None:
+                    continue
+                for tag in ("own", "common"):
+                    s = e.get(tag)
+                    if s is None:
+                        continue
+                    if s["n_h0"] == 0:
+                        say(f"    {jlabel(cells[(ds, mod)], mod):<26} "
+                            f"{tag:<6} no h=0 pairs")
+                        continue
+                    ms = s["mass_share_lab"]
+                    say(f"    {jlabel(cells[(ds, mod)], mod):<26} {tag:<6} "
+                        f"{s['n_h0']:>5} {_f(s['off0']):>7} "
+                        + "".join(f"{pct(x):>7}" for x in s["share_lab"])
+                        + f" {pct(ms[0]):>9} {pct(ms[1]):>9} "
+                        f"{pct(s['mass_share_lab_ge2']):>8}")
+    if "crosstab" in res:
+        say("\n" + "=" * 100)
+        say("CROSSTAB — cheap judges pooled on their common universe: judge "
+            "label (RAW_lab) × human grade")
+        say("=" * 100)
+        for ds in datasets:
+            x = res["crosstab"].get(ds, {})
+            if "counts_lab_by_h" not in x:
+                say(f"\n  {ds}: n/a ({x.get('note')})")
+                continue
+            say(f"\n  {ds}: m={x['m']} judges × {x['n_common']} pairs; "
+                f"n by human grade " + "/".join(map(str, x["n_by_grade"])))
+            say(f"    {'label':<7}" + "".join(f"{'h=' + str(g):>8}"
+                                              for g in GRADES)
+                + f"{'total':>8}{'E[h|lab]':>10}   P(h|lab)")
+            for l in GRADES:
+                cr = x["counts_lab_by_h"][l]
+                say(f"    {l:<7}" + "".join(f"{v:>8}" for v in cr)
+                    + f"{sum(cr):>8}{_f(x['E_h_given_lab'][l], 2, False):>10}"
+                    "   " + "/".join(_f(p, 2, False)
+                                     for p in x["P_h_given_lab"][l]))
+            say("    P(lab|h): " + "  ".join(
+                f"h={g}: " + "/".join(_f(p, 2, False)
+                                      for p in x["P_lab_given_h"][g])
+                for g in GRADES))
+            say("    E[lab|h]: " + "/".join(_f(v, 2, False)
+                                            for v in x["E_lab_given_h"]))
+    if "depthdedupe" in res:
+        d = res["depthdedupe"]
+        say("\n" + "=" * 100)
+        say("DEPTHDEDUPE — dl22 qrels judging depth without duplicate "
+            "propagation")
+        say("=" * 100)
+        if d["status"] == "dl22 not in scope":
+            say("  dl22 not in scope")
+        else:
+            pq = d["per_query_loaded_q"]
+            say(f"  loaded dl22 qrels: {d['n_judgments_loaded']} judgments, "
+                f"{d['n_queries_qrels']} queries, per query min/q25/med/q75/max "
+                + ("/".join(f"{v:.0f}" for v in pq) if pq else "n/a")
+                + f"; withDupes ({d['withdupes_lines']} lines): "
+                f"{'YES' if d['is_withdupes'] else 'no'}")
+            say("  non-dupes source: repo — none (no dedup path in src/ or "
+                "scripts/); ir_datasets — none (trec-dl-2022 qrels = "
+                "withDupes; msmarco-passage-v2/dedup has no qrels)")
+            say(f"  status: {d['status']}")
+            if d.get("note"):
+                say(f"  {d['note']}")
+            for mod, j in d.get("judges", {}).items():
+                a, b2 = j["Bq_withdupes"], j["Bq_nodupes"]
+                say(f"    {jlabel(cells[('dl22', mod)], mod):<26} depth med "
+                    f"withDupes {j['qrels_depth_withdupes_q'][2]:.0f} → "
+                    f"nodupes {j['qrels_depth_nodupes_q'][2]:.0f}; ρ "
+                    f"{_f(a['rho'])} → {_f(b2['rho'])} {_ci(b2['rho_ci'])}; "
+                    f"split {_f(a['split_diff'])} → {_f(b2['split_diff'])} "
+                    f"{_ci(b2['split_diff_ci'])}")
+            if d.get("nodupes_queries_missing"):
+                say(f"  WARNING: {len(d['nodupes_queries_missing'])} dl22 "
+                    f"queries absent from the non-dupes file (depth 0)")
+
+
+def addon_rows(res: dict) -> list[dict]:
+    rows = []
+    for ds, b in res.get("bound", {}).items():
+        if "rules" not in b:
+            continue
+        jn = f"cheap({b['m']})"
+        rows += [row("bound", ds, jn, "n_common", b["n_common"]),
+                 row("bound", ds, jn, "n_common_h0", b["n_common_h0"])]
+        for k, r in b["rules"].items():
+            pre = f"ge{k}of{b['m']}:"
+            nf = r["n_flagged"]
+            rows += [row("bound", ds, jn, pre + "n_flagged", nf, n=nf),
+                     row("bound", ds, jn, pre + "share_of_h0",
+                         r["share_of_h0"], n=b["n_common_h0"]),
+                     row("bound", ds, jn, pre + "n_queries", r["n_queries"],
+                         n=nf),
+                     row("bound", ds, jn, pre + "top5_query_share",
+                         r["top5_query_share"], n=nf)]
+            for mod, j in r["judges"].items():
+                n = j["n"]
+                rows += [
+                    row("bound", ds, mod, pre + "n_flagged_in_universe",
+                        j["n_flagged"], n=n),
+                    row("bound", ds, mod, pre + "delta_before",
+                        j["delta_before"], j["delta_before_ci"], n),
+                    row("bound", ds, mod, pre + "delta_after",
+                        j["delta_after"], j["delta_after_ci"], n),
+                    row("bound", ds, mod, pre + "delta_change",
+                        j["delta_change"], j["delta_change_ci"], n),
+                    row("bound", ds, mod, pre + "delta_rel_change",
+                        j["delta_rel_change"], n=n),
+                    row("bound", ds, mod, pre + "sign_flip", j["sign_flip"],
+                        n=n),
+                    row("bound", ds, mod, pre + "ratio_before",
+                        j["ratio_before"], j["ratio_before_ci"], n),
+                    row("bound", ds, mod, pre + "ratio_after",
+                        j["ratio_after"], j["ratio_after_ci"], n)]
+    for ds, md in res.get("mass", {}).items():
+        for mod, e in md.items():
+            for tag in ("own", "common"):
+                s = e.get(tag)
+                if s is None or s["n_h0"] == 0:
+                    continue
+                n = s["n_h0"]
+                rows.append(row("mass", ds, mod, f"{tag}:off0", s["off0"],
+                                n=n))
+                for g in GRADES:
+                    rows += [row("mass", ds, mod, f"{tag}:share_lab{g}",
+                                 s["share_lab"][g], n=n),
+                             row("mass", ds, mod, f"{tag}:mass_share_lab{g}",
+                                 s["mass_share_lab"][g], n=n)]
+                rows += [row("mass", ds, mod, f"{tag}:share_lab_ge2",
+                             s["share_lab_ge2"], n=n),
+                         row("mass", ds, mod, f"{tag}:mass_share_lab_ge2",
+                             s["mass_share_lab_ge2"], n=n)]
+    for ds, x in res.get("crosstab", {}).items():
+        if "counts_lab_by_h" not in x:
+            continue
+        jn = f"cheap({x['m']})"
+        for l in GRADES:
+            nl = int(sum(x["counts_lab_by_h"][l]))
+            rows.append(row("crosstab", ds, jn, f"E_h_given_lab{l}",
+                            x["E_h_given_lab"][l], n=nl))
+            for g in GRADES:
+                rows += [row("crosstab", ds, jn, f"count_lab{l}_h{g}",
+                             x["counts_lab_by_h"][l][g]),
+                         row("crosstab", ds, jn, f"P_lab{l}_given_h{g}",
+                             x["P_lab_given_h"][g][l]),
+                         row("crosstab", ds, jn, f"P_h{g}_given_lab{l}",
+                             x["P_h_given_lab"][l][g], n=nl)]
+        for g in GRADES:
+            rows.append(row("crosstab", ds, jn, f"E_lab_given_h{g}",
+                            x["E_lab_given_h"][g]))
+    d = res.get("depthdedupe")
+    if d and d.get("status") != "dl22 not in scope":
+        rows += [row("depthdedupe", "dl22", "qrels", "n_judgments_loaded",
+                     d["n_judgments_loaded"]),
+                 row("depthdedupe", "dl22", "qrels", "is_withdupes",
+                     d["is_withdupes"]),
+                 row("depthdedupe", "dl22", "qrels", "Bq_interpretable",
+                     d["status"] == "recomputed" or not d["is_withdupes"])]
+        for mod, j in d.get("judges", {}).items():
+            nq = j["n_queries"]
+            for tag in ("withdupes", "nodupes"):
+                s = j[f"Bq_{tag}"]
+                rows += [row("depthdedupe", "dl22", mod, f"rho_depth_{tag}",
+                             s["rho"], s["rho_ci"], nq),
+                         row("depthdedupe", "dl22", mod, f"split_diff_{tag}",
+                             s["split_diff"], s["split_diff_ci"], nq),
+                         row("depthdedupe", "dl22", mod, f"Bq_pass_{tag}",
+                             s["pass"], n=nq)]
+    return rows
+
+
+def cmd_addons(args, withdupes_lines: int = DL22_WITHDUPES_LINES) -> dict:
+    _LOG.clear()
+    parts = parse_parts(args.parts)
+    datasets = resolve_datasets(args.datasets)
+    pred_path = predictions_path(args.predictions)
+    reg = addons_gate("dl22" in datasets, args.unseal_dl22, pred_path)  # FIRST
+    say(f"[gate] IC registration + '{ADDON_MARKER}' heading found and "
+        f"committed ({reg.get('commit')})")
+    ctx = load_inputs(args, datasets)
+    shas = input_shas(ctx)
+    check_shas(reg, shas)
+    cells = build_cells(ctx, args.seed)
+    ustatus = check_universe(ctx, cells, keys_only=False)
+    for ds, s in ustatus.items():
+        say(f"[universe] {ds}: {s}")
+    od = out_dir(ctx["data_dir"])
+    icA = None
+    if "bound" in parts:
+        pA = od / "ic_A.json"
+        if not pA.exists():
+            sys.exit(f"ERROR: {pA} missing — `bound` asserts Δ before against "
+                     f"the `run` output; run `run` first.")
+        icA = json.loads(pA.read_text(encoding="utf-8"))["cells"]
+    res = run_addons(ctx, cells, parts, args.b, args.seed,
+                     args.dl22_nodupes_qrels, withdupes_lines)
+    if icA is not None:
+        n = assert_bound_vs_A(res["bound"], icA)
+        say(f"[assert] Δ before == ic_A.json delta for {n} judge×dataset "
+            f"cell(s)")
+    say(f"\nIC ADD-ONS (exploratory, pre-announced, unscored) | parts {parts} "
+        f"| datasets {datasets} | B={args.b} seed={args.seed}")
+    print_addons(res, cells, datasets, ctx["judges"])
+    meta = {"script": "scripts/incompleteness_check.py addons",
+            "git_hash": b4.git_hash(), "code_dirty": b6.code_dirty(),
+            "registration_commit": reg.get("commit"),
+            "input_sha256": shas, "datasets": datasets,
+            "judges": ctx["judges"], "cheap": sorted(ctx["cheap"]),
+            "flagships_40pct": sorted(ctx["flagships"]), "parts": parts,
+            "B": args.b, "seed": args.seed, "ci": "90% percentile, query "
+            "bootstrap", "bound_rules": list(BOUND_RULES),
+            "bound_primary": BOUND_PRIMARY, "relabel_grade": RELABEL_GRADE,
+            "universe_check": ustatus,
+            "blind_note": "post-IC exploratory add-ons, semi-blind (A/B/E and "
+                          "the evaluator review already seen); descriptive, "
+                          "not scored; the relabel bound is a circular upper "
+                          "bound from LLM labels, never a missed-positive "
+                          "rate", "timestamp_utc": now_utc()}
+    for p in parts:
+        key = "dl22" if p == "depthdedupe" else "datasets"
+        write_json(od / f"ic_addons_{p}.json", {"meta": meta, key: res[p]})
+    write_csv(od / "ic_summary_addons.csv", addon_rows(res))
+    logp = od / "ic_addons_log.txt"
+    logp.write_text("\n".join(_LOG) + "\n", encoding="utf-8")
+    print(f"[log] wrote {logp}")
+    print("REMINDER: the relabel bound is an upper bound from LLM labels, not "
+          "a miss rate; offsets stay relative to THESE assessors.")
+    return {"res": res, "out_dir": od, "cells": cells}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # selftest — synthetic, offline
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1517,7 +2165,8 @@ def _ns(**kw) -> argparse.Namespace:
                 predictions=None, judges=",".join(ST_JUDGES),
                 cheap=",".join(ST_CHEAP), flagships="stub/flag", b=200,
                 seed=SEED, unseal_dl22=True,
-                datasets=",".join(ST_DATASETS))
+                datasets=",".join(ST_DATASETS), parts="all",
+                dl22_nodupes_qrels=None)
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -1808,6 +2457,177 @@ def cmd_selftest(args) -> None:
                                         "E — ", "BACKFILL")))
         check("[40%] mark printed for the flagship", "flag [40%]" in logtxt)
 
+        # ── 6. addons (bound, mass, crosstab, depthdedupe) ────────────────
+        with contextlib.redirect_stdout(io.StringIO()):
+            r_ = _exits(lambda: cmd_addons(a_run))
+        check("addons gate: no '## IC 探索性追加' heading -> refuse", r_)
+        txtp = pred.read_text()
+        pred.write_text(txtp.replace(
+            "\n# Next section", f"\n{ADDON_MARKER}（selftest 预告）\n"
+            "bound / crosstab / depthdedupe / mass\n# Next section"))
+        check("addons gate: heading present but uncommitted -> refuse",
+              _exits(lambda: addons_gate(False, False, pred)))
+        _git_commit(repo, "IC add-ons pre-announced")
+        check("addons gate: dl22 without --unseal-dl22 -> refuse",
+              _exits(lambda: addons_gate(True, False, pred)))
+        check("addons: unknown part -> refuse",
+              _exits(lambda: parse_parts("bound,nope")))
+        with contextlib.redirect_stdout(io.StringIO()):
+            ad = cmd_addons(a_run)
+        ar, aod = ad["res"], ad["out_dir"]
+        check("addons: ic_addons_<part>.json ×4 + ic_summary_addons.csv + log",
+              all((aod / f"ic_addons_{p_}.json").exists()
+                  for p_ in ADDON_PARTS)
+              and (aod / "ic_summary_addons.csv").exists()
+              and (aod / "ic_addons_log.txt").exists())
+        with open(aod / "ic_summary_addons.csv", newline="",
+                  encoding="utf-8") as f:
+            rda = list(csv.DictReader(f))
+        check("addons csv: long columns, all four analyses",
+              tuple(rda[0].keys()) == CSV_COLS and
+              {r["analysis"] for r in rda} ==
+              {"bound", "mass", "crosstab", "depthdedupe"}, f"{len(rda)} rows")
+        # bound
+        bd = ar["bound"]
+        A_ = res["A"]
+        check("bound: Δ before == ic_A delta for every judge × dataset × rule",
+              all(abs(j["delta_before"] - A_[(ds, mo)]["delta"]) < 1e-12
+                  for ds in ST_DATASETS for r in bd[ds]["rules"].values()
+                  for mo, j in r["judges"].items()))
+        check("bound: m = 4 cheap judges, rules ≥1/≥2/≥3, flags nested",
+              all(bd[ds]["m"] == 4 and list(bd[ds]["rules"]) == [1, 2, 3]
+                  and bd[ds]["rules"][1]["n_flagged"] >=
+                  bd[ds]["rules"][2]["n_flagged"] >=
+                  bd[ds]["rules"][3]["n_flagged"] for ds in ST_DATASETS))
+        check("bound: relabel never raises Δ or the relevant-set ratio",
+              all(j["delta_after"] <= j["delta_before"] + 1e-12
+                  and j["ratio_after"] <= j["ratio_before"] + 1e-12
+                  for ds in ST_DATASETS for r in bd[ds]["rules"].values()
+                  for j in r["judges"].values()))
+        sh = [bd[ds]["rules"][k]["judges"][mo] for ds in ST_DATASETS
+              for k in (1, 2, 3) for mo in ("stub/shiftA", "stub/shiftB")]
+        check("bound: shift judges' Δ reduced, sign never flips",
+              all(j["delta_after"] < j["delta_before"] and not j["sign_flip"]
+                  for j in sh), "dl21 shiftA ≥2: "
+              f"{bd['dl21']['rules'][2]['judges']['stub/shiftA']['delta_before']:+.3f}"
+              f" → {bd['dl21']['rules'][2]['judges']['stub/shiftA']['delta_after']:+.3f}")
+        mb = bd["dl21"]["rules"][2]["judges"]["stub/missA"]
+        check("bound: missing-positive judge's Δ mostly removed by ≥2/4",
+              abs(mb["delta_after"]) < 0.5 * abs(mb["delta_before"]),
+              f"{mb['delta_before']:+.3f} → {mb['delta_after']:+.3f}")
+        fl21 = set(bd["dl21"]["rules"][2]["flagged_pairs"])
+        com21 = set(f"{q}|{d}" for q, d in cheap_common(
+            cells, "dl21", ctx["judges"], ctx["cheap"])["keys"])
+        miss21 = {f"{q}|{d}" for (dd, q, d) in world["missed"]
+                  if dd == "dl21"} & com21
+        check("bound: ≥2/4 flags recover the planted missed positives",
+              len(miss21 & fl21) / len(miss21) > 0.95
+              and bd["dl21"]["rules"][2]["share_of_h0"] > 0,
+              f"{len(miss21 & fl21)}/{len(miss21)}")
+        ff = bd["dl21"]["rules"][2]["judges"]["stub/flag"]
+        check("bound: flagship (40%) gets only flags inside its universe",
+              0 < ff["n_flagged"] < len(fl21), f"{ff['n_flagged']}")
+        with contextlib.redirect_stdout(io.StringIO()):
+            ar2 = run_addons(ctx, cells, ["bound"], 100, SEED)
+        check("bound: bootstrap deterministic (seed 42)",
+              ar2["bound"]["dl22"]["rules"][2]["judges"]["stub/shiftA"]
+              ["delta_after_ci"] == bd["dl22"]["rules"][2]["judges"]
+              ["stub/shiftA"]["delta_after_ci"])
+        # mass
+        ms_ = ar["mass"]
+        okm = True
+        for ds in ST_DATASETS:
+            for mo, e in ms_[ds].items():
+                for tag in ("own", "common"):
+                    s_ = e.get(tag)
+                    if s_ is None or s_["n_h0"] == 0:
+                        continue
+                    okm &= abs(sum(s_["share_lab"]) - 1) < 1e-12
+                    okm &= abs(sum(s_["mass_share_lab"]) - 1) < 1e-9
+                    okm &= abs(s_["mass_share_lab_ge2"] - s_["mass_share_lab"][2]
+                               - s_["mass_share_lab"][3]) < 1e-12
+        check("mass: label shares and off(0)-mass shares each sum to 1", okm)
+        check("mass: own-universe off0 == A off(h=0)",
+              all(abs(ms_[ds][mo]["own"]["off0"]
+                      - A_[(ds, mo)]["by_grade"][0]["off"]) < 1e-12
+                  for ds in ST_DATASETS for mo in ms_[ds]))
+        check("mass: cheap judges also on the common universe; flagship not",
+              "common" in ms_["dl21"]["stub/shiftA"]
+              and "common" not in ms_["dl21"]["stub/flag"])
+        check("mass: missing-positive judge's off(0) mass is label ≥2, the "
+              "shift judge's is not",
+              ms_["dl21"]["stub/missA"]["own"]["mass_share_lab_ge2"] > 0.8 >
+              ms_["dl21"]["stub/shiftA"]["own"]["mass_share_lab_ge2"],
+              f"{ms_['dl21']['stub/missA']['own']['mass_share_lab_ge2']:.2f} vs "
+              f"{ms_['dl21']['stub/shiftA']['own']['mass_share_lab_ge2']:.2f}")
+        # crosstab
+        okx = True
+        for ds in ST_DATASETS:
+            x = ar["crosstab"][ds]
+            cn = np.array(x["counts_lab_by_h"])
+            okx &= int(cn.sum()) == x["m"] * x["n_common"]
+            okx &= cn.sum(axis=0).tolist() == [x["m"] * n_
+                                               for n_ in x["n_by_grade"]]
+            okx &= all(abs(sum(r_) - 1) < 1e-12 for r_ in x["P_lab_given_h"])
+            okx &= all(abs(sum(r_) - 1) < 1e-12 for r_ in x["P_h_given_lab"])
+            okx &= x["n_common"] == len(cheap_common(
+                cells, ds, ctx["judges"], ctx["cheap"])["keys"])
+        check("crosstab: counts = m × n_common, column marginals = m × "
+              "n(h), conditionals sum to 1", okx)
+        # depthdedupe
+        dd_ = ar["depthdedupe"]
+        check("depthdedupe: stub qrels ≠ withDupes count -> Bq from run "
+              "stands, no numbers", dd_["is_withdupes"] is False
+              and "judges" not in dd_ and dd_["status"].startswith(
+                  "loaded dl22 qrels is not"))
+        nlines = ctx["qshas"]["dl22"][1]
+        dna = addon_depthdedupe(ctx, cells, ctx["judges"], 100, SEED, None,
+                                withdupes_lines=nlines)
+        check("depthdedupe: withDupes and no non-dupes file -> 'not "
+              "available', no Bq number", dna["status"] == "not available"
+              and "judges" not in dna and "not interpretable" in dna["note"])
+        ndp = root / "dl22_nodupes.txt"
+        ndp.write_text("".join(
+            f"{q} Q0 {d} {g}\n" for (dd, q, d), g in sorted(
+                world["qrels"].items()) if dd == "dl22"
+            and int(d.split("_")[1]) % 2 == 0))
+        drc = addon_depthdedupe(ctx, cells, ctx["judges"], 100, SEED,
+                                str(ndp), withdupes_lines=nlines)
+        jd = drc["judges"]["stub/missA"]
+        check("depthdedupe: with a non-dupes file -> Bq recomputed, depth "
+              "≤ withDupes depth, withDupes Bq == run's Bq",
+              drc["status"] == "recomputed"
+              and jd["qrels_depth_nodupes_q"][4] <=
+              jd["qrels_depth_withdupes_q"][4]
+              and jd["Bq_withdupes"]["rho"] ==
+              Bres[("dl22", "stub/missA")]["Bq"]["rho"],
+              f"ρ {_f(jd['Bq_withdupes']['rho'])} → "
+              f"{_f(jd['Bq_nodupes']['rho'])}")
+        alog = (aod / "ic_addons_log.txt").read_text(encoding="utf-8")
+        check("addons log: every section + Δ assert line",
+              all(s_ in alog for s_ in ("BOUND — ", "MASS — ", "CROSSTAB — ",
+                                        "DEPTHDEDUPE — ", "[assert] Δ before"))
+              )
+        # tampered ic_A -> refuse
+        pA = od / "ic_A.json"
+        jA = json.loads(pA.read_text(encoding="utf-8"))
+        jA["cells"]["dl21|stub/shiftA"]["delta"] += 1e-6
+        pA.write_text(json.dumps(jA), encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()):
+            r_ = _exits(lambda: cmd_addons(_ns(**common, predictions=str(pred),
+                                               b=100, parts="bound")))
+        check("addons: Δ before ≠ ic_A.json delta -> refuse", r_)
+        pA.unlink()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r_ = _exits(lambda: cmd_addons(_ns(**common, predictions=str(pred),
+                                               b=100, parts="bound")))
+        check("addons: bound without ic_A.json -> refuse", r_)
+        with contextlib.redirect_stdout(io.StringIO()):
+            ok_ = not _exits(lambda: cmd_addons(_ns(
+                **common, predictions=str(pred), b=100,
+                parts="mass,crosstab")))
+        check("addons: mass,crosstab run without ic_A.json", ok_)
+
     print("-" * 96)
     if fails:
         print(f"SELFTEST FAILED: {len(fails)} check(s): {fails}")
@@ -1848,12 +2668,28 @@ def main() -> None:
                     help="PREDICTIONS.md (default paper/PREDICTIONS.md)")
     pr.add_argument("--unseal-dl22", action="store_true")
     pr.add_argument("--b", type=int, default=B_BOOT)
+    pa = sub.add_parser("addons", help="post-IC exploratory add-ons "
+                        "(bound, crosstab, depthdedupe, mass); gated like run "
+                        "+ the '## IC 探索性追加' heading")
+    common(pa)
+    pa.add_argument("--predictions", default=None,
+                    help="PREDICTIONS.md (default paper/PREDICTIONS.md)")
+    pa.add_argument("--unseal-dl22", action="store_true")
+    pa.add_argument("--b", type=int, default=B_BOOT)
+    pa.add_argument("--parts", default="all", help="comma list of "
+                    f"{','.join(ADDON_PARTS)} (default all)")
+    pa.add_argument("--dl22-nodupes-qrels", default=None,
+                    help="TREC-format dl22 qrels WITHOUT duplicate propagation "
+                         "(not shipped by the repo or ir_datasets); without it "
+                         "depthdedupe reports 'not available'")
     sub.add_parser("selftest", help="synthetic offline checks")
     args = ap.parse_args()
     if args.cmd == "paste":
         cmd_paste(args)
     elif args.cmd == "run":
         cmd_run(args)
+    elif args.cmd == "addons":
+        cmd_addons(args)
     else:
         cmd_selftest(args)
 
