@@ -1806,3 +1806,122 @@ ALWAYS_FAIL；"FROZEN 显著优于全判不通过"；3.5 上"校正对人类刻�
 覆盖了训练变异"；"judge 的 D1a 错误由均值偏移决定 / 点落在曲线上"（仅平台）；"每格 0.247–0.249"；把校正训练学生
 称为中间类；把 RETHRESH 称为 §5.6 基线。
 判定：DE 研究在 §5.8 按 §B 改写、附录加入 f7（按 §E 修图）、RETHRESH 表、聚类区间表、分类表后关闭；无需再一轮复核。
+
+
+# IC 预注册 — 标注不完整性检查（scripts/incompleteness_check.py）
+
+登记时间：2026-11-06（commit 时间戳为准；paste 于 2026-10-26 03:13 UTC 打印，草稿同日发用户，2026-11-06 批准）。分析代码 git hash：3974d44。
+顺序：selftest → paste → 本块填写并 commit → run --unseal-dl22。只用已有数据，无 API 调用。
+问题：MS MARCO / TREC DL 上 judge 偏宽，是 qrels 漏标正例（数据集伪影）还是 judge 尺度平移（相对这些标注者工作点的错位）？
+
+## 输入 sha256（run 时逐个核对，不符或缺失即中止）
+- sha256[judgments]: 80eb59e75a637044e3788833d0184e0035c0d7be7a8c7c8972d16d1948cabd4d（judgments.parquet）
+- sha256[qrels:dl19]: ddc09d6f06fb22849b9f40aade0aa9bd2e60f5b2fb6a4b448a140c8aca1e1050（9260 条，规范化 "qid\tdocid\tgrade" 排序行）
+- sha256[qrels:dl20]: 28bc517d2d5df294c468c0ab0db38f489eb2a873a4b40ac4dddde1aff365c8b7（11386 条，规范化 "qid\tdocid\tgrade" 排序行）
+- sha256[qrels:dl21]: a86a7a355ecc4d4e3a6c20b659411fc9d90b78e5f39be1fcda4d5a1d23c8b7c7（10828 条，规范化 "qid\tdocid\tgrade" 排序行）
+- sha256[qrels:dl22]: d1b2378f581c3a61c3fd74e13ce6cf9c742010c6f7b9e2bd3df3526565eaa55e（386416 条，规范化 "qid\tdocid\tgrade" 排序行）
+- sha256[qrels:antique]: d969029d72d71dbf8d1e54b57e55aa840001ba2c3a0f7ef8bdef2cfcddd1f606（6589 条，规范化 "qid\tdocid\tgrade" 排序行，grade 已 −1 映射到 0-3）
+- sha256[flagship40:dl19]: e6bec0d27b9ad509f779962927e8c944b7f76b23f752e526b300b665bfb663be
+- sha256[flagship40:dl20]: 7db0c328decf7f38be57e7b0de035404f5f67c34f98bfe575e385a2b8a1e816f
+- sha256[flagship40:dl21]: 1b039e42f38591caacfd39535dbcf03375c5e6c7cf458dac9432399cf53acb52
+- sha256[flagship40:dl22]: b925eb2b393ad269df2ad768b68b7f3cf273a0f6fa9468446c95ba58a64ca7ec
+- sha256[flagship40:antique]: b8fe8ba776e15d21517ff6521947b45e229303cb31898d54511354ddbccff5ed
+
+## 定义（逐字；代码同文打印）
+- universe = batch6.prepare_cell：人工判过 且 judge 在 L1..L5 每档都有可用标签的对（B6/DE 同一 universe）；flagship 限其冻结 40% 样本（标 [40%]）。
+- RAW = L3 全部可用记录（paraphrase × run）的均值（连续，Part I 的 Δ 估计量）；RAW_lab = round-half-up(RAW)（E 的相关 = RAW_lab ≥ 2）。bootstrap：按 query，B=1000，seed 42，90% 百分位 CI。
+- 判据 A1：off(h) = mean(RAW − h) over the cell's pairs with human grade h (RAW = L3 record mean, continuous).  PASS iff off(0) ≠ 0, off(1) and off(2) both have the sign of off(0), and min(|off(1)|, |off(2)|) ≥ |off(0)|/3.  Defined iff n(h) ≥ 10 for h = 0, 1, 2.
+- 判据 A2：floor/ceiling-robust form: Δ = mean(RAW − h) over all the cell's pairs.  PASS iff Δ ≠ 0, off(1) and off(2) both have the sign of Δ, and min(|off(1)|, |off(2)|) ≥ |Δ|/3.  Defined iff n(h) ≥ 10 for h = 1, 2.
+- 判据 B：per query: depth = # universe pairs, o_q = mean(RAW − h).  PASS iff Spearman ρ(depth, o_q) ∈ [−0.30, +0.30] AND |mean o_q(shallow) − mean o_q(deep)| < 0.10, shallow = depth ≤ median (if that is every query — more than half at the cap — shallow = depth < median), deep = the rest; queries unweighted.  Defined iff ≥ 3 queries and depth not constant.
+- 判据 Bq：as B, with depth = # qrels judgments of the query in the full qrels (uncapped; the universe depth is capped by pair construction).
+- 判据 E：per dataset: cheap judges, pairs in every cheap judge's universe with human grade 0; R_j = RAW_lab ≥ 2; c = Σ_j R_j.  lift_2 = P_obs(c ≥ 2 | c ≥ 1) / P_ind(c ≥ 2 | c ≥ 1), P_ind = Poisson-binomial with the judges' marginal rates on the same pairs.  PASS iff lift_2 ≤ 2.0.  Defined iff ≥ 2 cheap judges and P_obs(c ≥ 1) > 0.
+- 解读：
+  - 纯"漏标正例"：偏移集中在 h=0；h≥1 的 off≈0 或为负 → A1/A2 不满足；浅判 query 偏移更大（ρ<0、浅−深>0）→ B 不满足（方向）；多个 judge 在同一批 h=0 对上同时判相关 → lift ≫ 1 → E 不满足。
+  - 纯"尺度平移"：h=1、h=2 的 off 与 Δ 同号（h=3 有天花板）→ A 满足；偏移与判深无关 → B 满足；h=0 上的正判在给定边际率时近似独立 → E 满足。
+  - 截断：任何 judge 在 h=0 处 RAW−h ≥ 0、在 h=3 处 ≤ 0（纯噪声也给出 off(0)>0、off(3)<0）→ 判别力在内部档 1–2；ANTIQUE（Δ<0）上 A1 结构性不可满足，用 A2。
+  - 共享的条目难度会让 judge 之间正相关，即使没有漏标 → lift>1 是预期的；h=1 层的 lift 作为同一流程的参照一并打印。
+  - universe 判深被构造截断（候选 top-50 ∩ qrels；dl21/dl22/antique 每 query 最多 30 对）→ Bq 用未截断的 qrels 计数；判深本身可能随相关文档数变化（pool / 判定流程），这是 B 与 Bq 的共同混杂。
+
+## 判定纪律（逐字；代码同文打印）
+1. 每条登记行 IC[<判据>|<家族>] 的 token ≥k/N（或 ≤k/N）作用于该家族中判据有定义的单元（judge×dataset；E 为 dataset）里满足判据的个数。
+2. 点估计判定：满足个数 ≥k（≤k）记命中，否则未中；90% CI 单独报告，永不改变判定。
+3. 登记的 N 与实际有定义的单元数不同（缺数据集、单元未定义）→ 不判定，注明原因。
+4. C、D 已发表（non-blind），只报告不计分；E 为探索性（可登记，但标注 exploratory）。
+
+## 单元（只含计数：对数、query 数、判深分位、各人工档对数；不含任何 judge 分数或一致性数值）
+- dl19（msmarco；universe 核对：not checked (no batch6_labels file)）
+  - gpt-5.4-mini (cheap): 1533 对 / 43 q；h=0/1/2/3: 610/376/353/194；universe 判深 min/q25/med/q75/max 14/30/35/42/50（5% query 在最大值）；qrels 判深 132/145/161/222/582；剔除不可用 0，LLM-only 0
+  - claude-haiku-4.5 (cheap): 1533 对 / 43 q；h=0/1/2/3: 610/376/353/194；universe 判深 min/q25/med/q75/max 14/30/35/42/50（5% query 在最大值）；qrels 判深 132/145/161/222/582；剔除不可用 0，LLM-only 0
+  - gemini-3.5-flash (cheap): 1533 对 / 43 q；h=0/1/2/3: 610/376/353/194；universe 判深 min/q25/med/q75/max 14/30/35/42/50（5% query 在最大值）；qrels 判深 132/145/161/222/582；剔除不可用 0，LLM-only 0
+  - deepseek-v4-flash (cheap): 1533 对 / 43 q；h=0/1/2/3: 610/376/353/194；universe 判深 min/q25/med/q75/max 14/30/35/42/50（5% query 在最大值）；qrels 判深 132/145/161/222/582；剔除不可用 0，LLM-only 0
+  - qwen3.7-plus (cheap): 1533 对 / 43 q；h=0/1/2/3: 610/376/353/194；universe 判深 min/q25/med/q75/max 14/30/35/42/50（5% query 在最大值）；qrels 判深 132/145/161/222/582；剔除不可用 0，LLM-only 0
+  - gpt-5.5 [40%]: 614 对 / 43 q；h=0/1/2/3: 229/149/149/87；universe 判深 min/q25/med/q75/max 6/12/14/17/20（7% query 在最大值）；qrels 判深 132/145/161/222/582；剔除不可用 0，LLM-only 0
+  - claude-opus-4.8 [40%]: 614 对 / 43 q；h=0/1/2/3: 229/149/149/87；universe 判深 min/q25/med/q75/max 6/12/14/17/20（7% query 在最大值）；qrels 判深 132/145/161/222/582；剔除不可用 0，LLM-only 0
+  - gemini-3.1-pro-preview [40%]: 614 对 / 43 q；h=0/1/2/3: 229/149/149/87；universe 判深 min/q25/med/q75/max 6/12/14/17/20（7% query 在最大值）；qrels 判深 132/145/161/222/582；剔除不可用 0，LLM-only 0
+  - claude-opus-5 [40%]: 614 对 / 43 q；h=0/1/2/3: 229/149/149/87；universe 判深 min/q25/med/q75/max 6/12/14/17/20（7% query 在最大值）；qrels 判深 132/145/161/222/582；剔除不可用 0，LLM-only 0
+  - gpt-5.6-sol [40%]: 614 对 / 43 q；h=0/1/2/3: 229/149/149/87；universe 判深 min/q25/med/q75/max 6/12/14/17/20（7% query 在最大值）；qrels 判深 132/145/161/222/582；剔除不可用 0，LLM-only 0
+  - E：cheap judge 5 个（gpt-5.4-mini, claude-haiku-4.5, gemini-3.5-flash, deepseek-v4-flash, qwen3.7-plus），共同对 1533，其中 h=0 610、h=1 376
+- dl20（msmarco；universe 核对：not checked (no batch6_labels file)）
+  - gpt-5.4-mini (cheap): 1965 对 / 54 q；h=0/1/2/3: 1060/448/222/235；universe 判深 min/q25/med/q75/max 15/31/38/42/50（6% query 在最大值）；qrels 判深 152/168/200/222/368；剔除不可用 0，LLM-only 0
+  - claude-haiku-4.5 (cheap): 1965 对 / 54 q；h=0/1/2/3: 1060/448/222/235；universe 判深 min/q25/med/q75/max 15/31/38/42/50（6% query 在最大值）；qrels 判深 152/168/200/222/368；剔除不可用 0，LLM-only 0
+  - gemini-3.5-flash (cheap): 1965 对 / 54 q；h=0/1/2/3: 1060/448/222/235；universe 判深 min/q25/med/q75/max 15/31/38/42/50（6% query 在最大值）；qrels 判深 152/168/200/222/368；剔除不可用 0，LLM-only 0
+  - deepseek-v4-flash (cheap): 1965 对 / 54 q；h=0/1/2/3: 1060/448/222/235；universe 判深 min/q25/med/q75/max 15/31/38/42/50（6% query 在最大值）；qrels 判深 152/168/200/222/368；剔除不可用 0，LLM-only 0
+  - qwen3.7-plus (cheap): 1965 对 / 54 q；h=0/1/2/3: 1060/448/222/235；universe 判深 min/q25/med/q75/max 15/31/38/42/50（6% query 在最大值）；qrels 判深 152/168/200/222/368；剔除不可用 0，LLM-only 0
+  - gpt-5.5 [40%]: 784 对 / 54 q；h=0/1/2/3: 412/175/96/101；universe 判深 min/q25/med/q75/max 6/12/15/17/20（7% query 在最大值）；qrels 判深 152/168/200/222/368；剔除不可用 0，LLM-only 0
+  - claude-opus-4.8 [40%]: 784 对 / 54 q；h=0/1/2/3: 412/175/96/101；universe 判深 min/q25/med/q75/max 6/12/15/17/20（7% query 在最大值）；qrels 判深 152/168/200/222/368；剔除不可用 0，LLM-only 0
+  - gemini-3.1-pro-preview [40%]: 784 对 / 54 q；h=0/1/2/3: 412/175/96/101；universe 判深 min/q25/med/q75/max 6/12/15/17/20（7% query 在最大值）；qrels 判深 152/168/200/222/368；剔除不可用 0，LLM-only 0
+  - claude-opus-5 [40%]: 784 对 / 54 q；h=0/1/2/3: 412/175/96/101；universe 判深 min/q25/med/q75/max 6/12/15/17/20（7% query 在最大值）；qrels 判深 152/168/200/222/368；剔除不可用 0，LLM-only 0
+  - gpt-5.6-sol [40%]: 784 对 / 54 q；h=0/1/2/3: 412/175/96/101；universe 判深 min/q25/med/q75/max 6/12/15/17/20（7% query 在最大值）；qrels 判深 152/168/200/222/368；剔除不可用 0，LLM-only 0
+  - E：cheap judge 5 个（gpt-5.4-mini, claude-haiku-4.5, gemini-3.5-flash, deepseek-v4-flash, qwen3.7-plus），共同对 1965，其中 h=0 1060、h=1 448
+- dl21（msmarco；universe 核对：identical (keys) for 6 judge(s): claude-opus-5, deepseek-v4-flash, deepseek-v4.1-flash, gemini-3.5-flash, gemini-3.8-flash, gpt-5.6-sol）
+  - gemini-3.5-flash (cheap): 1551 对 / 53 q；h=0/1/2/3: 528/520/330/173；universe 判深 min/q25/med/q75/max 22/30/30/30/30（77% query 在最大值）；qrels 判深 80/167/188/243/339；剔除不可用 325，LLM-only 0
+  - deepseek-v4-flash (cheap): 1551 对 / 53 q；h=0/1/2/3: 528/520/330/173；universe 判深 min/q25/med/q75/max 22/30/30/30/30（77% query 在最大值）；qrels 判深 80/167/188/243/339；剔除不可用 325，LLM-only 0
+  - deepseek-v4.1-flash (cheap): 1551 对 / 53 q；h=0/1/2/3: 528/520/330/173；universe 判深 min/q25/med/q75/max 22/30/30/30/30（77% query 在最大值）；qrels 判深 80/167/188/243/339；剔除不可用 325，LLM-only 0
+  - gemini-3.8-flash (cheap): 1551 对 / 53 q；h=0/1/2/3: 528/520/330/173；universe 判深 min/q25/med/q75/max 22/30/30/30/30（77% query 在最大值）；qrels 判深 80/167/188/243/339；剔除不可用 325，LLM-only 0
+  - claude-opus-5 [40%]: 622 对 / 53 q；h=0/1/2/3: 221/202/131/68；universe 判深 min/q25/med/q75/max 9/12/12/12/12（85% query 在最大值）；qrels 判深 80/167/188/243/339；剔除不可用 0，LLM-only 0
+  - gpt-5.6-sol [40%]: 622 对 / 53 q；h=0/1/2/3: 221/202/131/68；universe 判深 min/q25/med/q75/max 9/12/12/12/12（85% query 在最大值）；qrels 判深 80/167/188/243/339；剔除不可用 0，LLM-only 0
+  - E：cheap judge 4 个（gemini-3.5-flash, deepseek-v4-flash, deepseek-v4.1-flash, gemini-3.8-flash），共同对 1551，其中 h=0 528、h=1 520
+- dl22（msmarco；universe 核对：identical (keys) for 6 judge(s): claude-opus-5, deepseek-v4-flash, deepseek-v4.1-flash, gemini-3.5-flash, gemini-3.8-flash, gpt-5.6-sol）
+  - gemini-3.5-flash (cheap): 2146 对 / 76 q；h=0/1/2/3: 1113/705/234/94；universe 判深 min/q25/med/q75/max 18/28/30/30/30（66% query 在最大值）；qrels 判深 178/326/404/518/49627；剔除不可用 0，LLM-only 0
+  - deepseek-v4-flash (cheap): 2146 对 / 76 q；h=0/1/2/3: 1113/705/234/94；universe 判深 min/q25/med/q75/max 18/28/30/30/30（66% query 在最大值）；qrels 判深 178/326/404/518/49627；剔除不可用 0，LLM-only 0
+  - deepseek-v4.1-flash (cheap): 2146 对 / 76 q；h=0/1/2/3: 1113/705/234/94；universe 判深 min/q25/med/q75/max 18/28/30/30/30（66% query 在最大值）；qrels 判深 178/326/404/518/49627；剔除不可用 0，LLM-only 0
+  - gemini-3.8-flash (cheap): 2146 对 / 76 q；h=0/1/2/3: 1113/705/234/94；universe 判深 min/q25/med/q75/max 18/28/30/30/30（66% query 在最大值）；qrels 判深 178/326/404/518/49627；剔除不可用 0，LLM-only 0
+  - claude-opus-5 [40%]: 859 对 / 76 q；h=0/1/2/3: 443/279/100/37；universe 判深 min/q25/med/q75/max 7/11/12/12/12（70% query 在最大值）；qrels 判深 178/326/404/518/49627；剔除不可用 0，LLM-only 0
+  - gpt-5.6-sol [40%]: 859 对 / 76 q；h=0/1/2/3: 443/279/100/37；universe 判深 min/q25/med/q75/max 7/11/12/12/12（70% query 在最大值）；qrels 判深 178/326/404/518/49627；剔除不可用 0，LLM-only 0
+  - E：cheap judge 4 个（gemini-3.5-flash, deepseek-v4-flash, deepseek-v4.1-flash, gemini-3.8-flash），共同对 2146，其中 h=0 1113、h=1 705
+- antique（antique；universe 核对：identical (keys) for 6 judge(s): claude-opus-5, deepseek-v4-flash, deepseek-v4.1-flash, gemini-3.5-flash, gemini-3.8-flash, gpt-5.6-sol）
+  - gemini-3.5-flash (cheap): 1983 对 / 200 q；h=0/1/2/3: 501/726/358/398；universe 判深 min/q25/med/q75/max 3/10/10/10/10（98% query 在最大值）；qrels 判深 3/28/32/37/84；剔除不可用 1，LLM-only 0
+  - deepseek-v4-flash (cheap): 1985 对 / 200 q；h=0/1/2/3: 501/726/359/399；universe 判深 min/q25/med/q75/max 3/10/10/10/10（98% query 在最大值）；qrels 判深 3/28/32/37/84；剔除不可用 0，LLM-only 0
+  - deepseek-v4.1-flash (cheap): 1985 对 / 200 q；h=0/1/2/3: 501/726/359/399；universe 判深 min/q25/med/q75/max 3/10/10/10/10（98% query 在最大值）；qrels 判深 3/28/32/37/84；剔除不可用 0，LLM-only 0
+  - gemini-3.8-flash (cheap): 1985 对 / 200 q；h=0/1/2/3: 501/726/359/399；universe 判深 min/q25/med/q75/max 3/10/10/10/10（98% query 在最大值）；qrels 判深 3/28/32/37/84；剔除不可用 0，LLM-only 0
+  - claude-opus-5 [40%]: 795 对 / 200 q；h=0/1/2/3: 194/303/153/145；universe 判深 min/q25/med/q75/max 1/4/4/4/4（99% query 在最大值）；qrels 判深 3/28/32/37/84；剔除不可用 0，LLM-only 0
+  - gpt-5.6-sol [40%]: 795 对 / 200 q；h=0/1/2/3: 194/303/153/145；universe 判深 min/q25/med/q75/max 1/4/4/4/4（99% query 在最大值）；qrels 判深 3/28/32/37/84；剔除不可用 0，LLM-only 0
+  - E：cheap judge 4 个（gemini-3.5-flash, deepseek-v4-flash, deepseek-v4.1-flash, gemini-3.8-flash），共同对 1983，其中 h=0 501、h=1 726
+
+## 盲态声明
+- A（按人工档条件偏移）：blind — 条件偏移从未计算；总体 Δ 与各档语气偏移（C、D）已发表
+- B（偏移 vs 判深）：blind — 从未按判深分析过
+- E（cheap judge 在 h=0 上的一致率）：blind；探索性 — judge 间一致率从未按人工档分层计算
+- C、D：non-blind（已发表），只在 run 中打印，不计分。
+
+## 预测（键 = IC[<判据>|<家族>]；token ≥k/N 或 ≤k/N = 满足判据的单元数下/上限，N = 判据有定义的单元数（下方已按计数算好）；可增删行，格式不变）
+- IC[A1|msmarco] off(h=1)、off(h=2) 与 off(h=0) 同号且 min(|off1|,|off2|) ≥ |off0|/3；N=32｜预测：≥16/32
+- IC[A2|msmarco] off(h=1)、off(h=2) 与总体 Δ 同号且 min(|off1|,|off2|) ≥ |Δ|/3（地板/天花板稳健版）；N=32｜预测：≥24/32
+- IC[A2|antique] off(h=1)、off(h=2) 与总体 Δ 同号且 min(|off1|,|off2|) ≥ |Δ|/3（地板/天花板稳健版）；N=6｜预测：≥5/6
+- IC[B|msmarco] ρ(universe 判深, 每 query 偏移) ∈ [−0.3, +0.3] 且中位数切分差 < 0.1 grade；N=32｜预测：≥24/32
+- IC[B|antique] ρ(universe 判深, 每 query 偏移) ∈ [−0.3, +0.3] 且中位数切分差 < 0.1 grade；N=6｜预测：≥4/6
+- IC[Bq|msmarco] 同 B，判深 = 该 query 的 qrels 条数（未截断）；N=32｜预测：≥22/32
+- IC[Bq|antique] 同 B，判深 = 该 query 的 qrels 条数（未截断）；N=6｜预测：≥4/6
+- IC[E|msmarco] h=0 对上 cheap judge 一致率 lift_2 = P(c≥2|c≥1)/独立期望 ≤ 2（每 dataset 一个单元；探索性）；N=4｜预测：≥3/4
+- IC[E|antique] h=0 对上 cheap judge 一致率 lift_2 = P(c≥2|c≥1)/独立期望 ≤ 2（每 dataset 一个单元；探索性）；N=1｜预测：≥1/1
+主 agent 先验与判读规则（登记时写下，不计分）：
+- 主终点是 A2|msmarco 与 Bq|msmarco：尺度平移预测 h=1、h=2 上的偏移与 Δ 同号且不小于 Δ 的三分之一（32 个单元中至少 24 个），
+  且偏移与 qrels 判深无关（至少 22 个单元 |ρ|≤0.3 且中位数切分差 <0.1）。两者都成立 → 论文可写"偏移的行为像 judge 的尺度平移，
+  不像人类漏标正例"；A2 成立而 Bq 不成立 → 写"内部档上同向偏移成立，但偏移随判深变化，漏标不能排除为部分原因"；A2 不成立 →
+  "漏标正例"不能排除，Part I 的 Δ 解释须加限定。
+- A1 只作较弱的辅助行（|off0| 受地板放大，判据偏严），押一半；ANTIQUE 的 A1 结构性不可满足，已删行。
+- B 的 universe 判深在 dl21/dl22/antique 被截断（66–98% query 在上限），判别力低，Bq 为主；B 行保留作一致性检查。
+- E 为探索性：共享条目难度会让 lift>1 即使无漏标；msmarco 押 ≥3/4；antique 的 h=0 对上严格 judge 的边际率低，lift 的分母小、
+  方差大，押 ≥1/1 但预期它最可能失手。E 的 h=1 参照层用于判断 lift 的量级是否特异于 h=0。
+- 无论结果如何，C（跨集合符号）与 D（同一批对上语气改变偏移）已发表、不计分，作为论证的另两条支柱在论文中一并陈述。
+- 开箱结果（run 后回填）：
