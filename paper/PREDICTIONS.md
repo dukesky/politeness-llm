@@ -2058,3 +2058,51 @@ Limitations 一句按 G1；Application A 只改 DL22 那句（1.85→1.46，3.8-
 不引入 dl19/20 比例。**不得写**：MS MARCO 一个统一上界、把"五分之一到三分之一"用于 dl19/20；按相对降幅排 judge 或把
 语料族差异读成语料属性；"≥1/k"的 Δ 作为估计、"比例 <1 说明 judge 严格"；"所有 judge 偏移稳健为正"（三个宽松规则区间含 0；
 "无变号"可写）；任何 DL22 判深说法。盲审（F2）因 dl19/20 更重要：优先抽 dl19/20 被标记对，按 2 票 vs ≥3 票分层加匹配对照。
+
+# BA 预注册 — 作者盲审（探索性；作者本人盲评 IC flag 对）
+
+- 生成时间（UTC）：2026-11-07T00:08:52+00:00；脚本 scripts/blind_audit_sample.py @ 2154086；seed 20261106
+- 范围：DL19、DL20；cheap panel m = 5（openai/gpt-5.4-mini, anthropic/claude-haiku-4.5, google/gemini-3.5-flash, deepseek/deepseek-v4-flash, qwen/qwen3.7-plus）；票数 v = #{j: RAW_lab_j ≥ 2}（IC universe 原样，RAW_lab = L3 记录均值 round-half-up）
+- 分层定义（h = 人工等级）：
+  - F2：h = 0 且恰好 2/5 个 cheap judge RAW_lab ≥ 2；每数据集 8 条
+  - F3：h = 0 且 ≥ 3/5 个 cheap judge RAW_lab ≥ 2；每数据集 8 条
+  - C0：h = 0 且 0/5 个 cheap judge RAW_lab ≥ 2（同 query 优先）；每数据集 4 条
+  - H1：h = 1 且 ≥ 2/5 个 cheap judge RAW_lab ≥ 2（同 query 优先）；每数据集 5 条
+  - H2：h = 2 且 ≥ 2/5 个 cheap judge RAW_lab ≥ 2（同 query 优先）；每数据集 5 条
+- 抽样数（取得/配额，候选数）：
+  - dl19：F2 8/8（候选 46）；F3 8/8（候选 97）；C0 4/4（候选 410）；H1 5/5（候选 235）；H2 5/5（候选 322）
+  - dl20：F2 8/8（候选 73）；F3 8/8（候选 159）；C0 4/4（候选 674）；H1 5/5（候选 275）；H2 5/5（候选 193）
+- 合计 60 条；各层均满额
+- 排除规则：passage 去空白后 < 20 字符，或与已抽中条目 passage 完全相同 → 跳过
+- 抽样程序：见 audit_manifest.json 的 procedure 字段（脚本 docstring 原文）；同 query 优先 = 对照层先从本数据集已抽 F2/F3 的 query 中均匀抽，不足再从其余 query 均匀抽
+- sha256[audit_sheet.csv]: 7a31fe35d16decd8352b49fa3243e4399ef2bd4b7873373f5eced7d94874ea94
+- sha256[audit_sheet.md]: b3f14d24e98b242e2cfaa27fd0d789b229a0ca20709e9fa24ae548e979713e33
+- sha256[mapping_sealed.json]: 362167a8151c06c23d0ca167201ca9592d359df31f10dec6d7db2cd045ab4e10
+- sha256[judgments]: 80eb59e75a637044e3788833d0184e0035c0d7be7a8c7c8972d16d1948cabd4d
+- sha256[qrels:dl19]: ddc09d6f06fb22849b9f40aade0aa9bd2e60f5b2fb6a4b448a140c8aca1e1050
+- sha256[qrels:dl20]: 28bc517d2d5df294c468c0ab0db38f489eb2a873a4b40ac4dddde1aff365c8b7
+- sha256[ic_addons_bound.json]: 486da8e6f78ec82898cd301246b94465fd61a3da00f726c102f6006f0ec5016a
+- sha256[pairs:pairs_dl19.jsonl]: 0b7ce41901a19331af0e68a465f78a19f59641add2d35489edcd74e4dbbe7134
+- sha256[pairs:pairs_dl19_flagship40.jsonl]: e6bec0d27b9ad509f779962927e8c944b7f76b23f752e526b300b665bfb663be
+- sha256[pairs:pairs_dl20.jsonl]: d454752d065b5c37cf46698b7670acf6c045d98570c55798d30060c99e90fed6
+- sha256[pairs:pairs_dl20_flagship40.jsonl]: 7db0c328decf7f38be57e7b0de035404f5f67c34f98bfe575e385a2b8a1e816f
+- 盲评流程：作者只打开 audit_sheet（query + passage），按 config/prompts.yaml 的 rubric 给 0–3 分；评分完成并 commit 评分文件（或记录其 sha256）之前不打开 mapping_sealed.json；之后才创建 UNSEAL_OK 并运行 analyze --unseal
+- 分析定义：
+  - 每层（数据集合并，并分数据集列出）：作者评分 ≥2 的占比与 ≥1 的占比，精确二项（Clopper-Pearson）90% CI。
+  - m̂ = clip((p_F − p_H1)/(p_H2 − p_H1), 0, 1)，p = 评分 ≥2 占比、DL19+DL20 合并；F ∈ {F2, F3, F 合并（32 条等权）, F 加权（F2/F3 按 ≥2/5 flag 集中的总体规模加权）}；p_H2 ≤ p_H1 时 m̂ 无定义。
+  - m̂ 的 90% CI：在每个 层×数据集 单元内对条目有放回重抽（单元大小不变），B = 2000，seed 42，百分位区间；无定义的重抽次数单独报告。
+  - 隐含真漏标 Δ 降幅（每数据集）= m̂ × relabel bound（≥2/5 规则）的 Δ 降幅（cheap judge，取自 ic_addons_bound.json；flagship 40% universe 另列）；主报告用 F 合并，F 加权并列。
+  - 描述性、探索性、不计分；标注者为作者本人（非 NIST 评估员），盲于 qid/docid/数据集/分层/票数/人工等级；m̂ 是“若作者 = 评估员尺度”下的换算，不是漏标率。
+- 预测与判读规则（主 agent 2026-11-06 写下，打分前；描述性、不计分；主 agent 与评估员在作者打分完成前均未打开 mapping_sealed.json）：
+  - 校准层：p_H2（人类 2 分、被 judge 标记）≥ 0.70；p_H1（人类 1 分、被标记）≤ 0.50；p_C0（人类 0 分、无票）≤ 0.15。
+    若 p_H2 − p_H1 < 0.30，则作者尺度与评估员尺度不可对齐，只报告各层占比，不报告 m̂。
+  - 被标记层：p_F2 ∈ [0.20, 0.50]，p_F3 ∈ [0.40, 0.70]，F3 > F2。
+  - 主量 m̂（F 合并）先验区间 [0.25, 0.60]。论文措辞规则：m̂ ≤ 0.25 → "盲评作者在多数被标记对上同意评估员，DL19/20 的上界主要
+    反映 judge 共享的偏差"；m̂ ≥ 0.50 → "至少一半被标记对在不知情的人类读者眼中达到相关，DL19/20 上界中有相当份额可能是
+    真实漏标"；介于两者 → "混合，不能分解"。隐含真漏标 Δ 降幅 = m̂ × 0.187（dl19）/ 0.236（dl20），与 Δ 本身（0.32–0.78 /
+    0.45–0.78）并列报告。
+  - 无论结果如何：标注者为作者、非 NIST 评估员、n=60，结论限于"作者盲读"；不改变 IC 的 HIT 1 / MISS 8 计数；校正仍定义为
+    对发布 qrels 的对齐。
+- 打分包：内部 repo paper/blind_audit/{INSTRUCTIONS.md, audit_sheet.csv, audit_sheet.md, audit_manifest.json}；密封映射
+  paper/blind_audit/sealed/mapping_sealed.json（sha 已登记，打分完成前不得打开）；作者在副本 scores.csv 上填分并回传。
+- 开箱结果（作者打分回传、UNSEAL 后回填）：
