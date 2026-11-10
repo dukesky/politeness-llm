@@ -2106,3 +2106,47 @@ Limitations 一句按 G1；Application A 只改 DL22 那句（1.85→1.46，3.8-
 - 打分包：内部 repo paper/blind_audit/{INSTRUCTIONS.md, audit_sheet.csv, audit_sheet.md, audit_manifest.json}；密封映射
   paper/blind_audit/sealed/mapping_sealed.json（sha 已登记，打分完成前不得打开）；作者在副本 scores.csv 上填分并回传。
 - 开箱结果（作者打分回传、UNSEAL 后回填）：
+
+## BA 开箱结果（作者盲审，回填 2026-11-09 22:11 PST）
+
+- 评分交付：Tian 2026-11-09 22:06 PST 交付 Numbers 文件（内部 repo paper/blind_audit/scores_tian_2026-11-09.numbers，sha256 cf4c28e1816ff6ac59fa5396d93c568842f8253fc4ddd7490f90187d04c14259）；主控会话与主 agent 各自独立提取，60 个分数完全一致；60 行 item/query/passage 与登记表逐字一致；note 列全空。
+- 评分冻结 commit：内部 repo 9c3dfa9（2026-11-09T22:10:23-08:00）；scores.csv sha256 71db16127adbdbc901763dc44b40cba31ec7644ce37f1a1825da0949ba0bd831。冻结之前 mapping_sealed.json 未被打开。
+- 解封：UNSEAL_OK 创建于 2026-11-10T06:11:46Z（= 11-09 22:11 PST），analyze --unseal 随即运行（本地，脚本 @ 2154086；mapping sha 与 manifest 一致；ic_addons_bound.json 取自 Drive 采样时版本，sha 486da8e6… 与登记一致）。
+- 作者盲评分数分布（60 条）：0 ×6、1 ×14、2 ×18、3 ×22。
+- 脚本输出（原样）：
+
+- 评分文件 sha256[scores]: 71db16127adbdbc901763dc44b40cba31ec7644ce37f1a1825da0949ba0bd831；mapping sha256 与 manifest 一致
+- 作者评分 ≥2 占比（DL19+DL20 合并；精确二项 90% CI；分数据集计数）：
+  - F2：7/16 = 0.438 [0.227,0.667]（dl19 5/8，dl20 2/8）；≥1：14/16 = 0.875 [0.656,0.977]
+  - F3：10/16 = 0.625 [0.391,0.822]（dl19 3/8，dl20 7/8）；≥1：14/16 = 0.875 [0.656,0.977]
+  - C0：4/8 = 0.500 [0.193,0.807]（dl19 1/4，dl20 3/4）；≥1：6/8 = 0.750 [0.400,0.954]
+  - H1：10/10 = 1.000 [0.741,1.000]（dl19 5/5，dl20 5/5）；≥1：10/10 = 1.000 [0.741,1.000]
+  - H2：9/10 = 0.900 [0.606,0.995]（dl19 5/5，dl20 4/5）；≥1：10/10 = 1.000 [0.741,1.000]
+- m̂（bootstrap 90% CI，B = 2000，seed 42）：
+  - m̂(F2) = n/a [n/a]（无定义 2000/2000）
+  - m̂(F3) = n/a [n/a]（无定义 2000/2000）
+  - m̂(F_pooled) = n/a [n/a]（无定义 2000/2000）
+  - m̂(F_weighted) = n/a [n/a]（无定义 2000/2000）
+  - F 加权权重：F2 0.317 / F3 0.683（≥2/5 flag 集总体：F2 119，F3 256）
+- 隐含真漏标 Δ 降幅 = m̂ × relabel bound（≥2/5）Δ 降幅（cheap judge）：
+  - dl19：bound 降幅 0.187 → F 合并 n/a [n/a]；F 加权 n/a [n/a]；flagship 40% bound 降幅 0.195–0.195
+  - dl20：bound 降幅 0.236 → F 合并 n/a [n/a]；F 加权 n/a [n/a]；flagship 40% bound 降幅 0.219–0.219
+- 披露：标注者为作者本人（非 NIST 评估员），探索性、不计分；m̂ 假定作者与评估员同尺度，H1/H2 层校准作者对“judge 判相关”对的基线。
+
+### 预测判定（HIT 4 / MISS 2 / 不可判定 1）
+| 登记预测 | 实际 | 判定 |
+|---|---|---|
+| p_H2 ≥ 0.70 | 0.900 (9/10) | HIT |
+| p_H1 ≤ 0.50 | 1.000 (10/10) | **MISS** |
+| p_C0 ≤ 0.15 | 0.500 (4/8) | **MISS** |
+| p_F2 ∈ [0.20, 0.50] | 0.438 (7/16) | HIT |
+| p_F3 ∈ [0.40, 0.70] | 0.625 (10/16) | HIT |
+| F3 > F2 | 0.625 > 0.438 | HIT |
+| m̂(F 合并) ∈ [0.25, 0.60] | 无定义（p_H2 − p_H1 = −0.10 < 0.30，门限触发） | 不可判定 |
+
+- 门限规则按登记执行：p_H2 − p_H1 = −0.10 < 0.30 → "作者尺度与评估员尺度不可对齐，只报告各层占比，不报告 m̂"。m̂ 的论文措辞规则因此不适用；隐含真漏标 Δ 降幅不报告。
+- 描述性读法（不计分，非预登记）：作者盲读下，人工 1 分对 100% 被评为 ≥2，人工 0 分且无 judge 票的对照对 50% 被评为 ≥2，被标记对（F2/F3）为 44%/63%。作者对 h=0 对照组的 ≥2 占比（0.50）与 F2 层（0.44）相当，F3 层略高（0.63）。即作者本人按同一 rubric 盲读时，相对 NIST qrels 也系统性偏宽，方向与 LLM judge 相同；本审计因此不能把 DL19/20 的被标记对分解为"真漏标"与"judge 共享偏差"。n=60、单一标注者、作者本人，结论限于"作者盲读"。
+- 不变项（按登记）：不改变 IC 的 HIT 1 / MISS 8 计数；校正仍定义为对发布 qrels 的对齐。
+- 与登记流程的偏差：(a) 评分以 Numbers 而非 scores.csv/scores.xlsx 交付，经 numbers-parser 转换并双重独立核对（见上）；(b) analyze 在本地运行而非 Colab，输入文件（scores、mapping、manifest、bound）全部经 sha256 与登记值核对；(c) UNSEAL_OK 创建于内部 repo 的 sealed/ 目录（mapping 所在目录，脚本门限要求），而非 Drive 的 derived/incompleteness/blind_audit/。
+- 产物：内部 repo paper/blind_audit/sealed/ba_analysis.json、paper/blind_audit/ba_analyze_run.txt。
+- 待评估员（Sonnet）复核后再写入论文；本回填不改论文正文。
